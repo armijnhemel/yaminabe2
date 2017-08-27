@@ -100,7 +100,8 @@ def checktrusted(scanqueue, reportqueue, cursor, conn, trustedpackages):
 ## compute TLSH
 def scantlsh((filehash, filedir, filename, cursor, conn, gitconfigs, trustedrepositories)):
 	## first check if there is an exact match
-	res = cursor.execute('select filepath, gitrevision, giturl from tlshentries where sha256sum=%s', (filehash,)).fetchall()
+	cursor.execute('select filepath, gitrevision, giturl from tlshentries where sha256sum=%s', (filehash,))
+	res = cursor.fetchall()
 	if len(res) != 0:
 		if filter(lambda x: x[2] in trustedrepositories, res) != []:
 			results = ('exact', filter(lambda x: x[2] in trustedrepositories, res))
@@ -119,7 +120,8 @@ def scantlsh((filehash, filedir, filename, cursor, conn, gitconfigs, trustedrepo
 		## computed (example: all characters are the same)
 		results = ('undetermined', None)
 		return results
-	res = cursor.execute('select sha256sum, endindex, tlsh, gitrevision, giturl from tlshentries where filename=?', (os.path.basename(filename),)).fetchall()
+	cursor.execute('select sha256sum, endindex, tlsh, gitrevision, giturl from tlshentries where filename=?', (os.path.basename(filename),))
+	res = cursor.fetchall()
 	minhash = sys.maxint
 	mostpromising = None
 	mostpromisinggitrevision = None
@@ -488,6 +490,8 @@ def main(argv):
 		else:
 			sha256tofiles[f[0]] = [(f[1], f[2])]
 	
+	trust_tmp = []
+
 	## new queues
 	scanqueue = scanmanager.JoinableQueue(maxsize=0)
 	reportqueue = scanmanager.JoinableQueue(maxsize=0)
@@ -506,8 +510,6 @@ def main(argv):
 		p.start()
 
 	scanqueue.join()
-
-	trust_tmp = []
 
 	while True:
 		try:
