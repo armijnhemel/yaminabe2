@@ -1,9 +1,11 @@
 #!/usr/bin/python
 
-## Copyright 2012-2016 Armijn Hemel for Tjaldur Software Governance Solutions
+## Copyright 2012-2017 Armijn Hemel for Tjaldur Software Governance Solutions
 ## Licensed under Apache 2.0, see LICENSE file for details
 
 '''
+Yaminabe 2 project
+
 This program was originally written for the OSADL License Compliance Audit:
 
 https://www.osadl.org/License-Compliance-Audit.osadl-services-lca.0.html
@@ -20,10 +22,10 @@ It also checks for various "smells", such as:
 
 '''
 
-import os, os.path, sys, sqlite3, hashlib, subprocess, stat, tempfile
+import os, os.path, sys, hashlib, subprocess, stat, tempfile, psycopg2
 import magic, ConfigParser
 from optparse import OptionParser
-from multiprocessing import Pool
+import multiprocessing, Queue
 try:
 	import tlsh
 	tlshscan = True
@@ -47,8 +49,8 @@ extensions = {'.c'      : 'C',
               '.s'      : 'C',
               '.txx'    : 'C',
               '.y'      : 'C',
-              #'.dts'    : 'C',
-              #'.dtsi'   : 'C',
+              '.dts'    : 'C',
+              '.dtsi'   : 'C',
               '.cs'     : 'C#',
               '.groovy' : 'Java',
               '.java'   : 'Java',
@@ -60,45 +62,45 @@ extensions = {'.c'      : 'C',
               '.py'     : 'Python',
              }
 
-def checktrusted((filehash, db, trustedpackages)):
-	untrusted = set()
-	trusted = set()
-	conn = sqlite3.connect(db)
-	c = conn.cursor()
-	nc = conn.cursor()
-	c.execute('select distinct package, version from processed_file where checksum=?', (filehash,))
-	res = c.fetchone()
+def checktrusted(scanqueue, reportqueue, cursor, conn, trustedpackages):
+	localcursor = conn.cursor()
+        while True:
+                filehash = scanqueue.get()
+		untrusted = set()
+		trusted = set()
+		cursor.execute('select distinct package, version from processed_file where checksum=%s', (filehash,))
+		conn.commit()
+		res = cursor.fetchone()
+		next_entry = False
 
-	while res != None:
-		(package, version) = res
-		nc.execute('select origin from processed where package=? and version=?', (package,version))
-		origins = nc.fetchall()
-		## the package is not in trustedpackages
-		for o in origins:
-			if package not in trustedpackages.keys():
-				untrusted.add(o[0])
-				continue
-			trusted_origins = trustedpackages[package]
-			if o[0] in trusted_origins:
-				trusted.add(o[0])
-				c.close()
-				nc.close()
-				conn.close()
-				return (filehash, trusted, untrusted)
-			else:
-				untrusted.add(o[0])
-		res = c.fetchone()
-	c.close()
-	nc.close()
-	conn.close()
-	return (filehash, list(set(trusted)), list(set(untrusted)))
+		while res != None:
+			(package, version) = res
+			localcursor.execute('select origin from processed where package=%s and version=%s', (package,version))
+			conn.commit()
+			origins = localcursor.fetchall()
+			## the package is not in trustedpackages
+			for o in origins:
+				if package not in trustedpackages.keys():
+					untrusted.add(o[0])
+					continue
+				trusted_origins = trustedpackages[package]
+				if o[0] in trusted_origins:
+					trusted.add(o[0])
+					next_entry = True
+					break
+				else:
+					untrusted.add(o[0])
+			if next_entry:
+				break
+			res = cursor.fetchone()
 
-## compute
-def scantlsh((filehash, filedir, filename, tlshdb, gitconfigs, trustedrepositories)):
-	conn = sqlite3.connect(tlshdb)
-	cursor = conn.cursor()
+		reportqueue.put((filehash, trusted, untrusted))
+		scanqueue.task_done()
+
+## compute TLSH
+def scantlsh((filehash, filedir, filename, cursor, conn, gitconfigs, trustedrepositories)):
 	## first check if there is an exact match
-	res = cursor.execute('select filepath, gitrevision, giturl from tlshentries where sha256sum=?', (filehash,)).fetchall()
+	res = cursor.execute('select filepath, gitrevision, giturl from tlshentries where sha256sum=%s', (filehash,)).fetchall()
 	if len(res) != 0:
 		if filter(lambda x: x[2] in trustedrepositories, res) != []:
 			results = ('exact', filter(lambda x: x[2] in trustedrepositories, res))
@@ -116,8 +118,6 @@ def scantlsh((filehash, filedir, filename, tlshdb, gitconfigs, trustedrepositori
 		## file is either too small or a hash cannot be
 		## computed (example: all characters are the same)
 		results = ('undetermined', None)
-		cursor.close()
-		conn.close()
 		return results
 	res = cursor.execute('select sha256sum, endindex, tlsh, gitrevision, giturl from tlshentries where filename=?', (os.path.basename(filename),)).fetchall()
 	minhash = sys.maxint
@@ -175,11 +175,7 @@ def scantlsh((filehash, filedir, filename, tlshdb, gitconfigs, trustedrepositori
 				print 'blah'
 			os.unlink(tmpgitfile[1])
 		results = ('notexact', (filedir, filename, mostpromisinggitrevision, minhash, mostpromisingrepo))
-		cursor.close()
-		conn.close()
 		return results 
-	cursor.close()
-	conn.close()
 	return
 
 ## run ninka and fossology scans here
@@ -212,23 +208,24 @@ def licensescan((filehash, filedir, filename)):
 		fossologyres.update(licenses)
 	return (filehash, filedir, filename, ninkares, fossologyres)
 
-def scanfiles((directory, filename, db)):
-	conn = sqlite3.connect(db)
-	c = conn.cursor()
-	scanfile = open("%s/%s" % (directory, filename), 'r')
-	h = hashlib.new('sha256')
-	h.update(scanfile.read())
-	scanfile.close()
-	filehash = h.hexdigest()
-	c.execute('select * from processed_file where checksum=? LIMIT 1', (filehash,))
-	res = c.fetchall()
-	if res == []:
-		found = False	
-	else:
-		found = True
-	c.close()
-	conn.close()
-	return (filehash, directory, filename, found)
+def scanfiles(scanqueue, reportqueue, cursor, conn):
+	while True:
+		(directory, filename) = scanqueue.get()
+
+		scanfile = open(os.path.join(directory, filename), 'r')
+		h = hashlib.new('sha256')
+		h.update(scanfile.read())
+		scanfile.close()
+		filehash = h.hexdigest()
+		cursor.execute('select * from processed_file where checksum=%s LIMIT 1', (filehash,))
+		res = cursor.fetchall()
+		conn.commit()
+		if res == []:
+			found = False
+		else:
+			found = True
+		reportqueue.put((filehash, directory, filename, found))
+		scanqueue.task_done()
 
 def main(argv):
 	parser = OptionParser()
@@ -271,17 +268,13 @@ def main(argv):
 			continue
 		if section == "sourceverify":
 			try:
-				db = config.get(section, 'database')
+				postgresql_user = config.get(section, 'postgresql_user')
+				postgresql_password = config.get(section, 'postgresql_password')
+				postgresql_db = config.get(section, 'postgresql_db')
 			except:
-				print >>sys.stderr, "Configuration file malformed: missing database"
+				print >>sys.stderr, "Configuration file malformed: missing database information"
 				configfile.close()
 				sys.exit(1)
-			if tlshscan:
-				try:
-					tlshdb = config.get(section, 'tlshdatabase')
-				except:
-					tlshdb = None
-					print >>sys.stderr, "Configuration file malformed: missing TLSH database"
 			try:
 				verboseconf = config.get(section, 'verbose')
 				if verboseconf == 'yes':
@@ -354,17 +347,13 @@ def main(argv):
 				giturltopriority[giturl] = priority
 	configfile.close()
 
-	## TODO: sanity checks for DB
-	if not os.path.exists(db):
-		print >>sys.stderr, "database %s does not exist" % db
+	## sanity checks for the database
+	try:
+		c = psycopg2.connect(database=postgresql_db, user=postgresql_user, password=postgresql_password)
+		c.close()
+	except:
+		print >>sys.stderr, "Database server not running or malconfigured, exiting."
 		sys.exit(1)
-
-	if tlshdb != None:
-		if not os.path.exists(tlshdb):
-			print >>sys.stderr, "database %s does not exist" % tlshdb
-			sys.exit(1)
-	else:
-		tlshdb = None
 
 	filestoscan = set()
 
@@ -436,14 +425,54 @@ def main(argv):
 	except StopIteration:
 		pass
 
-	filestoscan = map(lambda x: x + (db,), filestoscan)
 	if verbose:
 		print "SCANNING %d files" % len(filestoscan)
 		sys.stdout.flush()
 
-	pool = Pool()
+	number_of_processors = multiprocessing.cpu_count()
 
-	scansha256 = pool.map(scanfiles, filestoscan, 1)
+	## keep a list of postgresql connections and cursors, for use in separate threads
+	postgresql_conns = []
+	postgresql_cursors = []
+
+	for i in range(0,number_of_processors):
+		c = psycopg2.connect(database=postgresql_db, user=postgresql_user, password=postgresql_password)
+		cursor = c.cursor()
+		postgresql_conns.append(c)
+		postgresql_cursors.append(cursor)
+
+	scanmanager = multiprocessing.Manager()
+	scanqueue = scanmanager.JoinableQueue(maxsize=0)
+	reportqueue = scanmanager.JoinableQueue(maxsize=0)
+	processes = []
+
+	## add the files to scan to the scan queue
+	map(lambda x: scanqueue.put(x), filestoscan)
+
+	## now create a number of processes
+	for i in range(0,number_of_processors):
+		p = multiprocessing.Process(target=scanfiles, args=(scanqueue,reportqueue, postgresql_cursors[i], postgresql_conns[i]))
+		processes.append(p)
+
+	for p in processes:
+		p.start()
+
+	scanqueue.join()
+
+	scansha256 = []
+
+	while True:
+		try:
+			scansha256.append(reportqueue.get_nowait())
+			reportqueue.task_done()
+		except Queue.Empty, e:
+			## Queue is empty
+			break
+
+	reportqueue.join()
+
+	for p in processes:
+		p.terminate()
 
 	notfoundfiles = map(lambda x: x[:3], filter(lambda x: x[3] == False, scansha256))
 	if verbose:
@@ -459,10 +488,40 @@ def main(argv):
 		else:
 			sha256tofiles[f[0]] = [(f[1], f[2])]
 	
+	## new queues
+	scanqueue = scanmanager.JoinableQueue(maxsize=0)
+	reportqueue = scanmanager.JoinableQueue(maxsize=0)
+
 	## now find out if this file is from any of the "trusted" sources.
-	trust_tmp = map(lambda x: (x[0], db, trustedpackages), foundfiles)
-	trust_tmp = pool.map(checktrusted, trust_tmp, 1)
-	trust_tmp = filter(lambda x: x[2] != [], trust_tmp)
+	map(lambda x: scanqueue.put(x[0]), foundfiles)
+
+	## now create a number of processes
+	processes = []
+
+	for i in range(0,number_of_processors):
+		p = multiprocessing.Process(target=checktrusted, args=(scanqueue,reportqueue, postgresql_cursors[i], postgresql_conns[i], trustedpackages))
+		processes.append(p)
+
+	for p in processes:
+		p.start()
+
+	scanqueue.join()
+
+	trust_tmp = []
+
+	while True:
+		try:
+			trust_tmp.append(reportqueue.get_nowait())
+			reportqueue.task_done()
+		except Queue.Empty, e:
+			## Queue is empty
+			break
+
+	reportqueue.join()
+
+	for p in processes:
+		p.terminate()
+
 	untrusted_tmp = filter(lambda x: x[1] == [], trust_tmp)
 	for u in untrusted_tmp:
 		untrusted_sha256s = sha256tofiles[u[0]]
@@ -479,13 +538,13 @@ def main(argv):
 	nomatches = []
 	undetermined = []
 	tlshscore = 0
-	if tlshscan and tlshdb != None:
+	if tlshscan != None and False:
 		if verbose:
 			print "COMPUTING AND COMPARING TLSH OF FILES NOT FOUND IN DATABASE\n"
 			sys.stdout.flush()
 		for t in untrusted:
 			filehash = t[0]
-			results = scantlsh(t + (tlshdb,gitconfigs, trustedrepositories))
+			results = scantlsh(t + (postgresql_cursors[0], postgresql_conns[0], gitconfigs, trustedrepositories))
 			if results != None:
 				(resulttype, resultentries) = results
 				if resulttype == 'exact':
@@ -503,7 +562,7 @@ def main(argv):
 		for t in notfoundfiles:
 			filehash = t[0]
 			## filehash, filedir, filename
-			results = scantlsh(t + (tlshdb,gitconfigs, trustedrepositories))
+			results = scantlsh(t + (postgresql_cursors[0], postgresql_conns[0], gitconfigs, trustedrepositories))
 			if results != None:
 				(resulttype, resultentries) = results
 				if resulttype == 'exact':
@@ -564,15 +623,13 @@ def main(argv):
 			print "TOTAL TLSH SCORE: %d\n" % tlshscore
 			sys.stdout.flush()
 
-	if scanlicense:
+	if scanlicense and False:
 		if verbose:
 			print "DETERMINING LICENSE OF FILES NOT FOUND"
 			sys.stdout.flush()
 		notfoundfiles = pool.map(licensescan, notfoundfiles, 1)
 	else:
 		notfoundfiles = map(lambda x: x + ([], []), notfoundfiles)
-
-	pool.terminate()
 
 	if verbose:
 		if smells != {}:
