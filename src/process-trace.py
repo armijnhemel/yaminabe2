@@ -162,31 +162,6 @@ def main(argv):
 		## add the pid to the list of known PIDs
 		knownpids.add(pid)
 
-	tracefile.close()
-
-	## reopen the tracefile
-	tracefile = open(args.tracefile, 'r')
-	for i in tracefile:
-		## either there is an exit code, or the system call is unfinished. The rest
-		## is irrelevant garbage.
-		## Assume that strace is running in English. Right now (March 8, 2018) strace
-		## has not been translated, so this is a safe assumption.
-		if not ('=' in i or 'unfinished' in i):
-			continue
-
-		## first determine the pid of the line
-		if i.startswith('[pid '):
-			pid = int(pidre.match(i).groups()[0])
-		else:
-			## This is the top level pid. It actually is possible to
-			## later reconstruct the pid if the top level process
-			## forks a process and the process returns, or if a vfork
-			## call is resumed.
-			if defaultpid != None:
-				pid = defaultpid
-			else:
-				pid = 'default'
-
 		## then look at the lines that have either 'unfinished' or 'resumed'
 		## Because the -y flag to strace is doing the heavy lifting just a bit of processing
 		## needs to be done for open() and openat() to make sure that false positives are
