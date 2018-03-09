@@ -167,6 +167,13 @@ def main(argv):
 	## reopen the tracefile
 	tracefile = open(args.tracefile, 'r')
 	for i in tracefile:
+		## either there is an exit code, or the system call is unfinished. The rest
+		## is irrelevant garbage.
+		## Assume that strace is running in English. Right now (March 8, 2018) strace
+		## has not been translated, so this is a safe assumption.
+		if not ('=' in i or 'unfinished' in i):
+			continue
+
 		## first determine the pid of the line
 		if i.startswith('[pid '):
 			pid = int(pidre.match(i).groups()[0])
