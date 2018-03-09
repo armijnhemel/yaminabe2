@@ -4,32 +4,39 @@
 ##
 ## SPDX-License-Identifier: GPL-3.0
 ##
-## Copyright 2017 - Armijn Hemel for Tjaldur Software Governance Solutions
+## Copyright 2017-2018 - Armijn Hemel for Tjaldur Software Governance Solutions
 ##
 ## ---- USAGE ----
 ##
 ## First trace a Linux kernel build with (for example) the following command:
 ##
-## strace -e trace=file,process,dup,dup2,close,pipe -q -f -s 256 make 2> ../linux-strace
+## strace -e trace=%file,process,dup,dup2,close,pipe,fchdir,read -y -qq -f -s 256 make 2> ../linux-strace
 ##
-## and then run this script.
+## and then run this script on the output.
 ##
 ## Make sure there is enough disk space available, as trace files for the
 ## Linux kernel tend to be quite big.
 
-import sys, os, re, datetime, copy
-import argparse, configparser, tempfile
-from collections import deque
+import sys, os, re, datetime, copy, shutil
+import argparse, configparser
 
 ## regular expression for process IDs (PIDs)
 pidre = re.compile('\[pid\s+(\d+)\]')
 
 ## some precompiled regular expressions for interesting system calls
-chdirre = re.compile("chdir\(\"([\w/\-_+,.]+)\"\s*\)\s+=\s+")
+## valid filename characters:
+## <>\w/\-+,.*$:;
+chdirre = re.compile("chdir\(\"([\w/\-_+,.]+)\"\s*\)\s+=\s+(\d+)")
+fchdirre = re.compile("fchdir\((\d+)<(.*)>\s*\)\s+=\s+(\d+)")
 getcwdre = re.compile("getcwd\(\"([\w/\-_+,.]+)\", \d+\)\s+=\s+")
-openre = re.compile("open\(\"([<>\w/\-+,.*$:;]+)\", ([\w|]+)(?:,\s+\d+)?\)\s+= (\-?\d+)")
-openatre = re.compile("openat\((\w+), \"([<>\w/\-+,.]+)\", ([\w|]+)(?:,\s+\d+)?\)\s+= (\-?\d+)")
+openre = re.compile("open\(\"([<>\w/\-+,.*$:;]+)\", ([\w|]+)(?:,\s+\d+)?\)\s+= (\-?\d+)<(.*)>$")
+openatre = re.compile("openat\((\w+), \"([<>\w/\-+,.*$:;]+)\", ([\w|]+)(?:,\s+\d+)?\)\s+= (\-?\d+)<(.*)>$")
+openatre2 = re.compile("openat\((\w+)<(.*)>, \"([<>\w/\-+,.*$:;]+)\", ([\w|]+)(?:,\s+\d+)?\)\s+= (\-?\d+)<(.*)>$")
 renamere = re.compile("rename\(\"([\w/\-+,.]+)\",\s+\"([\w/\-+,.]+)\"\)\s+=\s+(\-?\d+)")
+clonere = re.compile("clone\([\w/\-+,.=]+,\s+[\w|=]+,\s+[\w=]+?\)\s+=\s+(\-?\d+)")
+cloneresumedre = re.compile("clone\s*resumed>\s*.*=\s+(\-?\d+)$")
+vforkresumedre = re.compile("vfork\s*resumed>\s*\)\s*=\s*(\d+)")
+vforkre = re.compile("vfork\(\s*\)\s*=\s*(\d+)")
 
 def main(argv):
 	parser = argparse.ArgumentParser()
@@ -51,11 +58,14 @@ def main(argv):
 		parser.error("Trace file is not a file")
 
 	if args.basepath == None:
-		parser.error("basepath for Linux kernel source directory missing")
+		parser.error("basepath for source directory missing")
 
 	if not os.path.isabs(args.basepath):
-		parser.error("basepath for Linux kernel not an absolute path")
+		parser.error("basepath not an absolute path")
 
+	## TODO: symbolic links are actually resolved by strace when using
+	## the -y option, so make sure that the basepath is first resolved as
+	## well.
 	basepath = os.path.normpath(args.basepath)
 
 	tempdir = None
@@ -64,9 +74,6 @@ def main(argv):
 			parser.error("directory to write temporary files does not exist")
 		tempdir = args.tempdir
 
-	## The first step is to reconstruct some lines in the file and write them out to a file
-	temporary_file = tempfile.mkstemp(dir=args.tempdir)
-	reconstructed_file = open(temporary_file[1], 'w')
 	tracefile = open(args.tracefile, 'r')
 
 	## the pid of the first process is not shown in the trace file until after
@@ -76,205 +83,308 @@ def main(argv):
 	## that will be the top level PID.
 	knownpids = set()
 
-	## keep track of which syscalls are unfinished per PID
-	unfinishedsyscalls = {}
-
 	## set a dummy value for the first PID
 	defaultpid = None
 
-	linecounter = 0
-	lines = deque([])
-
 	## keep track of how many reconstructions are still pending
 	pendingreconstruction = 0
-
-	print("BEGIN RECONSTRUCTION", datetime.datetime.utcnow().isoformat(), file=sys.stderr)
-
-	for i in tracefile:
-		if "<unfinished ...>" in i or " resumed>" in i:
-			## grab the pid
-			if i.startswith('[pid '):
-				pid = int(pidre.match(i).groups()[0])
-			else:
-				## This is the top level pid. It actually is possible to
-				## later reconstruct the pid if the top level process
-				## forks a process and the process returns, or if a vfork
-				## call is resumed.
-				if defaultpid != None:
-					pid = defaultpid
-				else:
-					pid = 'default'
-			if " resumed>" in i:
-				## This is an easy way to get to the first PID
-				if pid not in knownpids:
-					defaultpid = pid
-					if 'default' in unfinishedsyscalls:
-						unfinishedsyscalls[pid] = copy.deepcopy(unfinishedsyscalls['default'])
-						del unfinishedsyscalls['default']
-			knownpids.add(pid)
-		## if <unfinished ...> is encountered
-		## find a matching resumed> for the system call
-		if "<unfinished ...>" in i:
-			if pid == 'default':
-				if defaultpid != None:
-					pid == defaultpid
-			## grab the name of the system call
-			syscall = re.search("(\w+)\(", i).groups()[0]
-			if syscall in ['vfork', 'open', 'openat', 'dup2', 'chdir', 'clone', 'pipe', 'fcntl']:
-				if not pid in unfinishedsyscalls:
-					unfinishedsyscalls[pid] = {}
-				if not syscall in unfinishedsyscalls[pid]:
-					unfinishedsyscalls[pid][syscall] = []
-				unfinishedsyscalls[pid][syscall].append(linecounter)
-				#print(linecounter)
-				pendingreconstruction += 1
-				lines.append(i.strip())
-				linecounter += 1
-			else:
-				pass
-		elif " resumed>" in i:
-			## grab the name of the system call
-			syscall = re.search("(\w+) resumed>", i).groups()[0]
-			## then reconstruct and replace the original line with 'unfinished' with the
-			## reconstructed line, but only for certain system calls
-			if syscall in ['vfork', 'open', 'openat', 'dup2', 'chdir', 'clone', 'pipe', 'fcntl']:
-				offset = unfinishedsyscalls[pid][syscall][-1]
-				#print(i.strip(), offset)
-				front = lines[offset].split(' <unfinished ...>', 1)[0]
-				tail = i.split(' resumed> ', 1)[-1]
-				reconstructed = front + tail
-				lines[offset] = reconstructed
-				unfinishedsyscalls[pid][syscall].remove(offset)
-				pendingreconstruction -= 1
-			else:
-				pass
-		else:
-			if pendingreconstruction == 0:
-				## no reconstructions pending, so flush everything
-				## to a file and reset counters
-				for l in lines:
-					print(l, file=reconstructed_file)
-				lines = deque([])
-				linecounter = 0
-				print(i.strip(), file=reconstructed_file)
-			else:
-				lines.append(i.strip())
-				linecounter += 1
-
-	## flush whatever is left in the buffer
-	if pendingreconstruction == 0:
-		## no reconstructions pending, so flush everything
-		## to a file and reset counters
-		for l in lines:
-			print(l, file=reconstructed_file)
-
-	tracefile.close()
-	reconstructed_file.close()
-
-	print("END RECONSTRUCTION", datetime.datetime.utcnow().isoformat(), file=sys.stderr)
 
 	openfiles = set()
 
 	## a list of files created or overwritten, so can be ignored later on
 	ignorefiles = set()
 
-	firstcwd = ''
 	defaultcwd = ''
 	firstgetcwd = False
-	pidtocwd = {}
 
-	tracefile = open(temporary_file[1], 'r')
-	for t in tracefile:
+	## mapping of (current) cwd to PID
+	pidtocwd = {}
+	#pidtocwd['default'] = defaultcwd
+
+	directories = set()
+
+	for i in tracefile:
+		## either there is an exit code, or the system call is unfinished. The rest
+		## is irrelevant garbage.
+		## Assume that strace is running in English. Right now (March 8, 2018) strace
+		## has not been translated, so this is a safe assumption.
+		if not ('=' in i or 'unfinished' in i):
+			continue
+
 		## first determine the pid of the line
-		if t.startswith('[pid '):
-			pid = int(pidre.match(t).groups()[0])
+		if i.startswith('[pid '):
+			pid = int(pidre.match(i).groups()[0])
 		else:
-			## This is the top level pid.
+			## This is the top level pid. It actually is possible to
+			## later reconstruct the pid if the top level process
+			## forks a process and the process returns, or if a vfork
+			## call is resumed.
 			if defaultpid != None:
 				pid = defaultpid
 			else:
 				pid = 'default'
 
-		if not pid in pidtocwd:
-			pidtocwd[pid] = defaultcwd
-		if 'getcwd(' in t:
-			if not firstgetcwd:
-				cwd = getcwdre.match(t).groups()[0]
-				defaultcwd = cwd
-				firstcwd = cwd
-				firstgetcwd = True
+		## look through the lines with 'resumed' to find the PIDs of child processes
+		## and store them.
+		if " resumed>" in i:
+			## This is an alternative way to get to the first PID in some circumstances
+			if pid not in knownpids:
+				defaultpid = pid
+				pidtocwd[pid] = copy.deepcopy(pidtocwd['default'])
+			if 'vfork' in i:
+				vforkres = vforkresumedre.search(i)
+				if vforkres != None:
+					vforkpid = int(vforkres.groups()[0])
+					pidtocwd[vforkpid] = copy.deepcopy(pidtocwd[pid])
+			elif 'clone' in i:
+				cloneres = cloneresumedre.search(i.strip())
+				if cloneres != None:
+					clonepid = int(cloneres.groups()[0])
+					pidtocwd[clonepid] = copy.deepcopy(pidtocwd[pid])
+
+		## add the pid to the list of known PIDs
+		knownpids.add(pid)
+
+		## then look at the lines that have either 'unfinished' or 'resumed'
+		## Because the -y flag to strace is doing the heavy lifting just a bit of processing
+		## needs to be done for open() and openat() to make sure that false positives are
+		## not included.
+		if "<unfinished ...>" in i or " resumed>" in i:
+			if not ' resumed>' in i:
+				if 'open(' in i or 'openat(' in i:
+					processopen = False
+					if 'openat(' in i:
+						openatres = re.search("openat\((\w+), \"([<>\w/\-+,.]+)\", ([\w|]+)", i.strip())
+						if openatres != None:
+							openfd = os.path.normpath(openatres.groups()[0])
+							openpath = os.path.normpath(openatres.groups()[1])
+							openflags = set(openatres.groups()[2].split('|'))
+							processopen = True
+					elif 'open(' in i:
+						openres = re.search("open\(\"([<>\w/\-+,.*$:;]+)\", ([\w|]+)", i.strip())
+						if openres != None:
+							openpath = os.path.normpath(openres.groups()[0])
+							openflags = set(openres.groups()[1].split('|'))
+							processopen = True
+
+					if processopen:
+						## now check the flags to see if a file is new. If so, it can
+						## be added to ignorefiles
+						## Don't look at directories here, as sometimes regular files are
+						## opened with O_DIRECTORY and will fail with -1, which can only
+						## be found out later. This is too risky and could lead to files
+						## being ignored that should not be ignored.
+						if "O_RDWR" in openflags or "O_WRONLY" in openflags:
+							if "O_CREAT" in openflags:
+								if "O_EXCL" in openflags or "O_TRUNC" in openflags:
+									openpath = os.path.normpath(os.path.join(pidtocwd[pid], openpath))
+									ignorefiles.add(openpath)
+			else:
+				## look at 'resumed'
+				if '<... open' in i:
+					openres = re.search('<... open(?:at)? resumed> \)\s+=\s+(?P<return>\-?\d+)', i)
+					if openres != None:
+						openreturn = openres.group('return')
+						if openreturn != '-1':
+							## only look at files that can be succesfully opened
+							openres = re.search('<... open(:?at)? resumed> \)\s+=\s+\d+<(?P<path>.*)>$', i)
+							if openres != None:
+								openpath = openres.group('path')
+
+								## absolute paths are only relevant if
+								## coming from the same source code directory
+								if openpath.startswith('/'):
+									if not openpath.startswith(basepath):
+										continue
+
+								if openpath in ignorefiles:
+									## not interested in files that have been created by
+									## the process, as they will not have been in the
+									## original source code tree
+									continue
+
+								if openpath in openfiles:
+									## files that are already recorded as open
+									## can be ignored
+									continue
+
+								if openpath in directories:
+									## directories can be safely ignored
+									continue
+
+								## add the full reconstructed path, relative to root
+								openfiles.add(openpath)
+		else:
+			## then look at the 'regular' lines
+			if '+++ exited with' in i:
+				## this message can be in the trace file unless -qq is passed
+				## as a parameter
 				continue
-		if 'chdir(' in t:
-			res = chdirre.search(t)
-			if res != None:
-				chdirpath = res.groups()[0]
-				chdirresult = res.groups()
-				if chdirpath == '.':
+			if '--- SIGCHLD' in i:
+				## The child process has exited, so remove information from the
+				## data structures in case of PID wrapping (which can easily happen)
+				sigchldres = re.search("si_pid=(\w+),", i)
+				if sigchldres != None:
+					sigchldpid = int(sigchldres.groups()[0])
+					## remove this pid from everywhere
+					del pidtocwd[sigchldpid]
+				continue
+
+			syscallres = re.search("(\w+)\(", i)
+			if syscallres != None:
+				syscall = syscallres.groups()[0]
+			else:
+				## something really weird happening here, so exiting
+				continue
+
+			## there are only a few syscalls that are interesting at the moment
+			if syscall not in ['open', 'openat', 'chdir', 'fchdir', 'getcwd', 'rename', 'clone', 'read']:
+				continue
+
+			if not pid in pidtocwd and pid != 'default':
+				pidtocwd[pid] = defaultcwd
+
+			## cloned processes inherit the cwd of the parent process
+			if 'clone(' in i:
+				cloneres = clonere.search(i)
+				if cloneres != None:
+					clonepid = int(cloneres.groups()[0])
+					pidtocwd[clonepid] = copy.deepcopy(pidtocwd[pid])
+			if 'getcwd(' in i:
+				if not firstgetcwd:
+					cwd = getcwdre.match(i).groups()[0]
+					defaultcwd = cwd
+					firstgetcwd = True
+					if not 'default' in pidtocwd:
+						pidtocwd['default'] = cwd
+						directories.add(cwd)
 					continue
-				if chdirpath.startswith('/'):
-					pidtocwd[pid] = chdirpath
+			if 'chdir(' in i:
+				if 'fchdir(' in i:
+					fchdirres = fchdirre.search(i)
+					if fchdirres != None:
+						fchdirfd = int(fchdirres.groups()[0])
+						fullchdirpath = fchdirres.groups()[1]
+						fchdirresult = fchdirres.groups()[2]
+						pidtocwd[pid] = fullchdirpath
+						directories.add(fullchdirpath)
 				else:
-					if pid in pidtocwd:
-						pidtocwd[pid] = os.path.normpath(os.path.join(pidtocwd[pid], chdirpath))
-		if 'rename(' in t:
-			## check if files are renamed. If so, see if they are in 'ignored',
-			## and if so add the renamed file to ignored as well
-			res = renamere.search(t)
-			if res != None:
-				(orig, target, returncode) = res.groups()
-				if returncode == 0:
-					if orig.startswith('/'):
-						orig = os.path.normpath(orig)
-					else:
-						orig = os.path.normpath(os.path.join(pidtocwd[pid], orig))
-					if orig in ignored:
-						if target.startswith('/'):
-							target = os.path.normpath(target)
+					chdirres = chdirre.search(i)
+					if chdirres != None:
+						chdirpath = chdirres.groups()[0]
+						chdirresult = chdirres.groups()[1]
+						if chdirresult != 0:
+							continue
+						if chdirpath == '.':
+							continue
+						if chdirpath.startswith('/'):
+							pidtocwd[pid] = chdirpath
+							directories.add(chdirpath)
 						else:
-							target = os.path.normpath(os.path.join(pidtocwd[pid], target))
-						ignored.add(target)
-		if not ('open(' in t or 'openat(' in t):
-			continue
-		if 'open(' in t:
-			res = openre.search(t.strip())
-			if res != None:
-				openpath = os.path.normpath(res.groups()[0])
-				openflags = set(res.groups()[1].split('|'))
-				openreturn = res.groups()[2]
-				## ignore files in /proc and /dev as they are not interesting
-				if openpath.startswith('/dev/') or openpath.startswith('/proc/'):
-					continue
-				if openreturn != '-1':
-					if openpath in ignorefiles:
+							if pid in pidtocwd:
+								print("JOIN", pid, pidtocwd[pid], chdirpath, os.path.normpath(os.path.join(basepath, pidtocwd[pid], chdirpath)))
+								pidtocwd[pid] = os.path.normpath(os.path.join(basepath, pidtocwd[pid], chdirpath))
+								print("PATH EXISTS?", pid, pidtocwd[pid], os.path.exists(pidtocwd[pid]))
+			if 'open(' in i:
+				openres = openre.search(i.strip())
+				if openres != None:
+					openreturn = openres.groups()[2]
+					if openreturn == '-1':
+						## -1 means "No such file or directory" so ignore
 						continue
+					openpath = os.path.normpath(openres.groups()[0])
+					openflags = set(openres.groups()[1].split('|'))
+					fullopenpath = openres.groups()[3]
+
+					if fullopenpath in directories:
+						## directories can be safely ignored
+						continue
+
+					## ignore files that should be ignored
+					if fullopenpath in ignorefiles:
+						continue
+
+					## if files have already been recorded they are not interesting
+					if fullopenpath in openfiles:
+						continue
+
+					## directories are not interesting, except to store the
+					## file descriptor
+					if 'O_DIRECTORY' in openflags:
+						directories.add(fullopenpath)
+						continue
+					## absolute paths are only relevant if
+					## coming from the same source code directory
+					if openpath.startswith('/'):
+						if not openpath.startswith(basepath):
+							continue
+					## now check the flags to see if a file is new. If so, it can
+					## be added to ignorefiles
+					if "O_RDWR" in openflags or "O_WRONLY" in openflags:
+						if "O_CREAT" in openflags:
+							if "O_EXCL" in openflags or "O_TRUNC" in openflags:
+								ignorefiles.add(fullopenpath)
+								continue
+						#print("PATH", fullopenpath)
+					## add the full reconstructed path, relative to root
+					openfiles.add(fullopenpath)
+			if 'openat(' in i:
+				openres = openatre.search(i.strip())
+				if openres != None:
+					openfd = os.path.normpath(openres.groups()[0])
+					openpath = os.path.normpath(openres.groups()[1])
+					openflags = set(openres.groups()[2].split('|'))
+					openreturn = openres.groups()[3]
+					fullopenpath = openres.groups()[4]
+				else:
+					openres = openatre2.search(i.strip())
+					if openres != None:
+						openfd = os.path.normpath(openres.groups()[0])
+						openpath = os.path.normpath(openres.groups()[2])
+						openflags = set(openres.groups()[3].split('|'))
+						openreturn = openres.groups()[4]
+						fullopenpath = openres.groups()[5]
+				if openres != None:
+					## directories are not interesting, so record them to ignore them
+					if 'O_DIRECTORY' in openflags:
+						directories.add(fullopenpath)
+						continue
+					if openpath.startswith('/'):
+						if not openpath.startswith(basepath):
+							continue
 					## now check the flags to see if a file is new
 					if "O_RDWR" in openflags or "O_WRONLY" in openflags:
 						if "O_CREAT" in openflags:
 							if "O_EXCL" in openflags or "O_TRUNC" in openflags:
-								ignorefiles.add(openpath)
-					else:
-						## add the full reconstructed path, relative to root
-						if 'O_DIRECTORY' in openflags:
-							continue
-						openfiles.add(openpath)
-			#else:
-				#print(t.strip())
-		elif 'openat(' in t:
-			pass
-			## this needs some more work
-			#res = openatre.search(t.strip())
-			#if res != None:
-				#print(res[0])
-			#else:
-				#print(t.strip())
-	tracefile.close()
+								openpath = os.path.normpath(os.path.join(pidtocwd[pid], openpath))
+								ignorefiles.add(fullopenpath)
+								continue
+					## add the full reconstructed path, relative to root
+					openfiles.add(fullopenpath)
+			if 'rename(' in i:
+				renameres = renamere.search(i.strip())
+				if renameres != None:
+					sourcefile = os.path.normpath(os.path.join(pidtocwd[pid], renameres.groups()[0]))
+					targetfile = os.path.normpath(os.path.join(pidtocwd[pid],renameres.groups()[1]))
+					## check if sourcefile is in ignorefiles. If so, then targetfile should be as well.
+					if sourcefile in ignorefiles:
+						ignorefiles.add(targetfile)
 
+	print("END RECONSTRUCTION", datetime.datetime.utcnow().isoformat(), file=sys.stderr)
+
+	targetdir = '/tmp/busy'
 	for i in openfiles:
-		print(i, file='/tmp/openfiles')
-
-	#print(firstgetcwd)
-	#for k in pidtocwd:
-		#print(k, pidtocwd[k])
+		if not os.path.exists(i):
+			continue
+		basedir = os.path.dirname(i[len(basepath)+1:])
+		if basedir != '':
+			try:
+				os.makedirs(os.path.join(targetdir, basedir))
+			except:
+				pass
+			shutil.copy(i, os.path.join(targetdir, basedir))
+		else:
+			shutil.copy(i, targetdir)
 
 
 if __name__ == "__main__":
