@@ -38,6 +38,157 @@ cloneresumedre = re.compile("clone\s*resumed>\s*.*=\s+(\-?\d+)$")
 vforkresumedre = re.compile("vfork\s*resumed>\s*\)\s*=\s*(\d+)")
 vforkre = re.compile("vfork\(\s*\)\s*=\s*(\d+)")
 
+def processline(traceline, defaultpid, pidtocwd, directories, ignorefiles, openfiles, basepath, defaultcwd):
+	## then look at the 'regular' lines
+	if '+++ exited with' in traceline:
+		## this message can be in the trace file unless -qq is passed
+		## as a parameter
+		return
+	if '--- SIGCHLD' in traceline:
+		## The child process has exited, so remove information from the
+		## data structures in case of PID wrapping (which can easily happen)
+		sigchldres = re.search("si_pid=(\w+),", traceline)
+		if sigchldres != None:
+			sigchldpid = int(sigchldres.groups()[0])
+			## remove this pid from everywhere
+			del pidtocwd[sigchldpid]
+		return
+
+	syscallres = re.search("(\w+)\(", traceline)
+	if syscallres != None:
+		syscall = syscallres.groups()[0]
+	else:
+		## something really weird happening here, so exiting
+		return
+
+	## there are only a few syscalls that are interesting at the moment
+	if syscall not in ['open', 'openat', 'chdir', 'fchdir', 'getcwd', 'rename', 'clone']:
+		return
+
+	## first determine the pid of the line
+	if traceline.startswith('[pid '):
+		pid = int(pidre.match(traceline).groups()[0])
+	else:
+		## This is the top level pid. It actually is possible to
+		## later reconstruct the pid if the top level process
+		## forks a process and the process returns, or if a vfork
+		## call is resumed.
+		if defaultpid != None:
+			pid = defaultpid
+		else:
+			pid = 'default'
+
+	if not pid in pidtocwd and pid != 'default':
+		pidtocwd[pid] = defaultcwd
+
+	if 'chdir(' in traceline:
+		if 'fchdir(' in traceline:
+			fchdirres = fchdirre.search(traceline)
+			if fchdirres != None:
+				fchdirfd = int(fchdirres.groups()[0])
+				fullchdirpath = fchdirres.groups()[1]
+				fchdirresult = fchdirres.groups()[2]
+				pidtocwd[pid] = fullchdirpath
+				directories.add(fullchdirpath)
+		else:
+			chdirres = chdirre.search(traceline)
+			if chdirres != None:
+				chdirpath = chdirres.groups()[0]
+				chdirresult = int(chdirres.groups()[1])
+				if chdirresult != 0:
+					return
+				if chdirpath == '.':
+					return
+				if chdirpath.startswith('/'):
+					pidtocwd[pid] = chdirpath
+					directories.add(chdirpath)
+				else:
+					if pid in pidtocwd:
+						pidtocwd[pid] = os.path.normpath(os.path.join(basepath, pidtocwd[pid], chdirpath))
+	if 'open(' in traceline:
+		openres = openre.search(traceline)
+		if openres != None:
+			openreturn = openres.groups()[2]
+			if openreturn == '-1':
+				## -1 means "No such file or directory" so ignore
+				return
+			openpath = os.path.normpath(openres.groups()[0])
+			openflags = set(openres.groups()[1].split('|'))
+			fullopenpath = openres.groups()[3]
+
+			if fullopenpath in directories:
+				## directories can be safely ignored
+				return
+
+			## ignore files that should be ignored
+			if fullopenpath in ignorefiles:
+				return
+
+			## if files have already been recorded they are not interesting
+			if fullopenpath in openfiles:
+				return
+
+			## directories are not interesting, except to store the
+			## file descriptor
+			if 'O_DIRECTORY' in openflags:
+				directories.add(fullopenpath)
+				return
+			## absolute paths are only relevant if
+			## coming from the same source code directory
+			if openpath.startswith('/'):
+				if not openpath.startswith(basepath):
+					return
+			## now check the flags to see if a file is new. If so, it can
+			## be added to ignorefiles
+			if "O_RDWR" in openflags or "O_WRONLY" in openflags:
+				if "O_CREAT" in openflags:
+					if "O_EXCL" in openflags or "O_TRUNC" in openflags:
+						ignorefiles.add(fullopenpath)
+						return
+			## add the full reconstructed path, relative to root
+			openfiles.add(fullopenpath)
+
+	if 'openat(' in traceline:
+		openres = openatre.search(traceline)
+		if openres != None:
+			openfd = os.path.normpath(openres.groups()[0])
+			openpath = os.path.normpath(openres.groups()[1])
+			openflags = set(openres.groups()[2].split('|'))
+			openreturn = openres.groups()[3]
+			fullopenpath = openres.groups()[4]
+		else:
+			openres = openatre2.search(traceline)
+			if openres != None:
+				openfd = os.path.normpath(openres.groups()[0])
+				openpath = os.path.normpath(openres.groups()[2])
+				openflags = set(openres.groups()[3].split('|'))
+				openreturn = openres.groups()[4]
+				fullopenpath = openres.groups()[5]
+		if openres != None:
+			## directories are not interesting, so record them to ignore them
+			if 'O_DIRECTORY' in openflags:
+				directories.add(fullopenpath)
+				return
+			if openpath.startswith('/'):
+				if not openpath.startswith(basepath):
+					return
+			## now check the flags to see if a file is new
+			if "O_RDWR" in openflags or "O_WRONLY" in openflags:
+				if "O_CREAT" in openflags:
+					if "O_EXCL" in openflags or "O_TRUNC" in openflags:
+						ignorefiles.add(fullopenpath)
+						return
+			## add the full reconstructed path, relative to root
+			openfiles.add(fullopenpath)
+	if 'rename(' in traceline:
+		renameres = renamere.search(traceline)
+		if renameres != None:
+			sourcefile = os.path.normpath(os.path.join(pidtocwd[pid], renameres.groups()[0]))
+			targetfile = os.path.normpath(os.path.join(pidtocwd[pid],renameres.groups()[1]))
+			## check if sourcefile is in ignorefiles. If so, then targetfile should be as well.
+			if sourcefile in ignorefiles:
+				ignorefiles.add(targetfile)
+
 def main(argv):
 	parser = argparse.ArgumentParser()
 
@@ -76,6 +227,14 @@ def main(argv):
 
 	tracefile = open(args.tracefile, 'r')
 
+	defaultcwd = ''
+	firstgetcwd = False
+
+	pidtocwd = {}
+	#pidtocwd['default'] = defaultcwd
+
+	directories = set()
+
 	## the pid of the first process is not shown in the trace file until after
 	## returning from the first clone/execve/etc.
 	## It is easy to find out what the top level PID is by keeping track of
@@ -86,22 +245,13 @@ def main(argv):
 	## set a dummy value for the first PID
 	defaultpid = None
 
-	## keep track of how many reconstructions are still pending
-	pendingreconstruction = 0
-
 	openfiles = set()
 
 	## a list of files created or overwritten, so can be ignored later on
 	ignorefiles = set()
 
-	defaultcwd = ''
-	firstgetcwd = False
-
-	## mapping of (current) cwd to PID
-	pidtocwd = {}
-	#pidtocwd['default'] = defaultcwd
-
-	directories = set()
+	backlog = []
+	backlogged = False
 
 	for i in tracefile:
 		## either there is an exit code, or the system call is unfinished. The rest
@@ -136,6 +286,10 @@ def main(argv):
 
 		## cloned processes inherit the cwd of the parent process
 		elif 'clone(' in i:
+			if '<unfinished ...>' in i:
+				backlog.append(i.strip())
+				backlogged = True
+				continue
 			cloneres = clonere.search(i)
 			if cloneres != None:
 				clonepid = int(cloneres.groups()[0])
@@ -158,6 +312,15 @@ def main(argv):
 				if cloneres != None:
 					clonepid = int(cloneres.groups()[0])
 					pidtocwd[clonepid] = copy.deepcopy(pidtocwd[pid])
+					if backlog != []:
+						for traceline in backlog:
+							processline(traceline, defaultpid, pidtocwd, directories, ignorefiles, openfiles, basepath, defaultcwd)
+						backlog = []
+						backlogged = False
+
+		if backlogged:
+			backlog.append(i.strip())
+			continue
 
 		## add the pid to the list of known PIDs
 		knownpids.add(pid)
@@ -232,142 +395,8 @@ def main(argv):
 								## add the full reconstructed path, relative to root
 								openfiles.add(openpath)
 		else:
-			## then look at the 'regular' lines
-			if '+++ exited with' in i:
-				## this message can be in the trace file unless -qq is passed
-				## as a parameter
-				continue
-			if '--- SIGCHLD' in i:
-				## The child process has exited, so remove information from the
-				## data structures in case of PID wrapping (which can easily happen)
-				sigchldres = re.search("si_pid=(\w+),", i)
-				if sigchldres != None:
-					sigchldpid = int(sigchldres.groups()[0])
-					## remove this pid from everywhere
-					del pidtocwd[sigchldpid]
-				continue
+			processline(i.strip(), defaultpid, pidtocwd, directories, ignorefiles, openfiles, basepath, defaultcwd)
 
-			syscallres = re.search("(\w+)\(", i)
-			if syscallres != None:
-				syscall = syscallres.groups()[0]
-			else:
-				## something really weird happening here, so exiting
-				continue
-
-			## there are only a few syscalls that are interesting at the moment
-			if syscall not in ['open', 'openat', 'chdir', 'fchdir', 'getcwd', 'rename', 'clone']:
-				continue
-
-			if not pid in pidtocwd and pid != 'default':
-				pidtocwd[pid] = defaultcwd
-
-			if 'chdir(' in i:
-				if 'fchdir(' in i:
-					fchdirres = fchdirre.search(i)
-					if fchdirres != None:
-						fchdirfd = int(fchdirres.groups()[0])
-						fullchdirpath = fchdirres.groups()[1]
-						fchdirresult = fchdirres.groups()[2]
-						pidtocwd[pid] = fullchdirpath
-						directories.add(fullchdirpath)
-				else:
-					chdirres = chdirre.search(i)
-					if chdirres != None:
-						chdirpath = chdirres.groups()[0]
-						chdirresult = int(chdirres.groups()[1])
-						if chdirresult != 0:
-							continue
-						if chdirpath == '.':
-							continue
-						if chdirpath.startswith('/'):
-							pidtocwd[pid] = chdirpath
-							directories.add(chdirpath)
-						else:
-							if pid in pidtocwd:
-								pidtocwd[pid] = os.path.normpath(os.path.join(basepath, pidtocwd[pid], chdirpath))
-			if 'open(' in i:
-				openres = openre.search(i.strip())
-				if openres != None:
-					openreturn = openres.groups()[2]
-					if openreturn == '-1':
-						## -1 means "No such file or directory" so ignore
-						continue
-					openpath = os.path.normpath(openres.groups()[0])
-					openflags = set(openres.groups()[1].split('|'))
-					fullopenpath = openres.groups()[3]
-
-					if fullopenpath in directories:
-						## directories can be safely ignored
-						continue
-
-					## ignore files that should be ignored
-					if fullopenpath in ignorefiles:
-						continue
-
-					## if files have already been recorded they are not interesting
-					if fullopenpath in openfiles:
-						continue
-
-					## directories are not interesting, except to store the
-					## file descriptor
-					if 'O_DIRECTORY' in openflags:
-						directories.add(fullopenpath)
-						continue
-					## absolute paths are only relevant if
-					## coming from the same source code directory
-					if openpath.startswith('/'):
-						if not openpath.startswith(basepath):
-							continue
-					## now check the flags to see if a file is new. If so, it can
-					## be added to ignorefiles
-					if "O_RDWR" in openflags or "O_WRONLY" in openflags:
-						if "O_CREAT" in openflags:
-							if "O_EXCL" in openflags or "O_TRUNC" in openflags:
-								ignorefiles.add(fullopenpath)
-								continue
-						#print("PATH", fullopenpath)
-					## add the full reconstructed path, relative to root
-					openfiles.add(fullopenpath)
-			if 'openat(' in i:
-				openres = openatre.search(i.strip())
-				if openres != None:
-					openfd = os.path.normpath(openres.groups()[0])
-					openpath = os.path.normpath(openres.groups()[1])
-					openflags = set(openres.groups()[2].split('|'))
-					openreturn = openres.groups()[3]
-					fullopenpath = openres.groups()[4]
-				else:
-					openres = openatre2.search(i.strip())
-					if openres != None:
-						openfd = os.path.normpath(openres.groups()[0])
-						openpath = os.path.normpath(openres.groups()[2])
-						openflags = set(openres.groups()[3].split('|'))
-						openreturn = openres.groups()[4]
-						fullopenpath = openres.groups()[5]
-				if openres != None:
-					## directories are not interesting, so record them to ignore them
-					if 'O_DIRECTORY' in openflags:
-						directories.add(fullopenpath)
-						continue
-					if openpath.startswith('/'):
-						if not openpath.startswith(basepath):
-							continue
-					## now check the flags to see if a file is new
-					if "O_RDWR" in openflags or "O_WRONLY" in openflags:
-						if "O_CREAT" in openflags:
-							if "O_EXCL" in openflags or "O_TRUNC" in openflags:
-								ignorefiles.add(fullopenpath)
-								continue
-					## add the full reconstructed path, relative to root
-					openfiles.add(fullopenpath)
-			if 'rename(' in i:
-				renameres = renamere.search(i.strip())
-				if renameres != None:
-					sourcefile = os.path.normpath(os.path.join(pidtocwd[pid], renameres.groups()[0]))
-					targetfile = os.path.normpath(os.path.join(pidtocwd[pid],renameres.groups()[1]))
-					## check if sourcefile is in ignorefiles. If so, then targetfile should be as well.
-					if sourcefile in ignorefiles:
-						ignorefiles.add(targetfile)
 	print("END RECONSTRUCTION", datetime.datetime.utcnow().isoformat(), file=sys.stderr)
 
 	targetdir = '/tmp/busy'
