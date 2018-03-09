@@ -10,7 +10,7 @@
 ##
 ## First trace a Linux kernel build with (for example) the following command:
 ##
-## strace -e trace=%file,process,dup,dup2,close,pipe,fchdir,read -y -qq -f -s 256 make 2> ../linux-strace
+## strace -e trace=%file,process,dup,dup2,close,pipe,fchdir -y -qq -f -s 256 make 2> ../linux-strace
 ##
 ## and then run this script on the output.
 ##
@@ -238,7 +238,7 @@ def main(argv):
 				continue
 
 			## there are only a few syscalls that are interesting at the moment
-			if syscall not in ['open', 'openat', 'chdir', 'fchdir', 'getcwd', 'rename', 'clone', 'read']:
+			if syscall not in ['open', 'openat', 'chdir', 'fchdir', 'getcwd', 'rename', 'clone']:
 				continue
 
 			if not pid in pidtocwd and pid != 'default':
@@ -369,7 +369,6 @@ def main(argv):
 					## check if sourcefile is in ignorefiles. If so, then targetfile should be as well.
 					if sourcefile in ignorefiles:
 						ignorefiles.add(targetfile)
-
 	print("END RECONSTRUCTION", datetime.datetime.utcnow().isoformat(), file=sys.stderr)
 
 	targetdir = '/tmp/busy'
@@ -385,7 +384,6 @@ def main(argv):
 			shutil.copy(i, os.path.join(targetdir, basedir))
 		else:
 			shutil.copy(i, targetdir)
-
 
 if __name__ == "__main__":
 	main(sys.argv)
