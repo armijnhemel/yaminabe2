@@ -381,7 +381,6 @@ def main(argv):
 					if "O_RDWR" in openflags or "O_WRONLY" in openflags:
 						if "O_CREAT" in openflags:
 							if "O_EXCL" in openflags or "O_TRUNC" in openflags:
-								openpath = os.path.normpath(os.path.join(pidtocwd[pid], openpath))
 								ignorefiles.add(fullopenpath)
 								continue
 					## add the full reconstructed path, relative to root
