@@ -124,6 +124,23 @@ def main(argv):
 			else:
 				pid = 'default'
 
+		if 'getcwd(' in i:
+			if not firstgetcwd:
+				cwd = getcwdre.match(i).groups()[0]
+				defaultcwd = cwd
+				firstgetcwd = True
+				if not 'default' in pidtocwd:
+					pidtocwd['default'] = cwd
+					directories.add(cwd)
+				continue
+
+		## cloned processes inherit the cwd of the parent process
+		elif 'clone(' in i:
+			cloneres = clonere.search(i)
+			if cloneres != None:
+				clonepid = int(cloneres.groups()[0])
+				pidtocwd[clonepid] = copy.deepcopy(pidtocwd[pid])
+
 		## look through the lines with 'resumed' to find the PIDs of child processes
 		## and store them.
 		if " resumed>" in i:
@@ -144,6 +161,24 @@ def main(argv):
 
 		## add the pid to the list of known PIDs
 		knownpids.add(pid)
+
+	tracefile.close()
+
+	## reopen the tracefile
+	tracefile = open(args.tracefile, 'r')
+	for i in tracefile:
+		## first determine the pid of the line
+		if i.startswith('[pid '):
+			pid = int(pidre.match(i).groups()[0])
+		else:
+			## This is the top level pid. It actually is possible to
+			## later reconstruct the pid if the top level process
+			## forks a process and the process returns, or if a vfork
+			## call is resumed.
+			if defaultpid != None:
+				pid = defaultpid
+			else:
+				pid = 'default'
 
 		## then look at the lines that have either 'unfinished' or 'resumed'
 		## Because the -y flag to strace is doing the heavy lifting just a bit of processing
@@ -244,21 +279,6 @@ def main(argv):
 			if not pid in pidtocwd and pid != 'default':
 				pidtocwd[pid] = defaultcwd
 
-			## cloned processes inherit the cwd of the parent process
-			if 'clone(' in i:
-				cloneres = clonere.search(i)
-				if cloneres != None:
-					clonepid = int(cloneres.groups()[0])
-					pidtocwd[clonepid] = copy.deepcopy(pidtocwd[pid])
-			if 'getcwd(' in i:
-				if not firstgetcwd:
-					cwd = getcwdre.match(i).groups()[0]
-					defaultcwd = cwd
-					firstgetcwd = True
-					if not 'default' in pidtocwd:
-						pidtocwd['default'] = cwd
-						directories.add(cwd)
-					continue
 			if 'chdir(' in i:
 				if 'fchdir(' in i:
 					fchdirres = fchdirre.search(i)
@@ -272,7 +292,7 @@ def main(argv):
 					chdirres = chdirre.search(i)
 					if chdirres != None:
 						chdirpath = chdirres.groups()[0]
-						chdirresult = chdirres.groups()[1]
+						chdirresult = int(chdirres.groups()[1])
 						if chdirresult != 0:
 							continue
 						if chdirpath == '.':
@@ -282,9 +302,7 @@ def main(argv):
 							directories.add(chdirpath)
 						else:
 							if pid in pidtocwd:
-								print("JOIN", pid, pidtocwd[pid], chdirpath, os.path.normpath(os.path.join(basepath, pidtocwd[pid], chdirpath)))
 								pidtocwd[pid] = os.path.normpath(os.path.join(basepath, pidtocwd[pid], chdirpath))
-								print("PATH EXISTS?", pid, pidtocwd[pid], os.path.exists(pidtocwd[pid]))
 			if 'open(' in i:
 				openres = openre.search(i.strip())
 				if openres != None:
