@@ -165,6 +165,17 @@ def processline(traceline, defaultpid, pidtocwd, directories, ignorefiles, openf
 				openreturn = openres.groups()[4]
 				fullopenpath = openres.groups()[5]
 		if openres != None:
+			if fullopenpath in directories:
+				## directories can be safely ignored
+				return
+
+			## ignore files that should be ignored
+			if fullopenpath in ignorefiles:
+				return
+
+			## if files have already been recorded they are not interesting
+			if fullopenpath in openfiles:
+				return
 			## directories are not interesting, so record them to ignore them
 			if 'O_DIRECTORY' in openflags:
 				directories.add(fullopenpath)
