@@ -2,6 +2,11 @@
 
 ## Yaminabe 3 project: Trace processor
 ##
+## Background information:
+##
+## * http://www.st.ewi.tudelft.nl/~sander/pdf/publications/TUD-SERG-2012-010.pdf
+## * http://rebels.ece.mcgill.ca/confpaper/2014/09/14/tracing-software-build-processes-to-uncover-license-compliance-inconsistencies.html
+##
 ## SPDX-License-Identifier: GPL-3.0
 ##
 ## Copyright 2017-2018 - Armijn Hemel for Tjaldur Software Governance Solutions
