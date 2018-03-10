@@ -1,0 +1,11 @@
+BusyBox
+
+To properly trace BusyBox you might need to trace both steps that are needed to build BusyBox (make config, plus the actual build). If you have a configuration file you should copy it to .config in the BusyBox directory and then run:
+
+$ strace -e trace=%file,process,dup,dup2,close,pipe,fchdir -y -qq -f -s 256 make silentoldconfig 2> /path/to/tracefile
+
+After that you need to trace the actual build and append it to the existing trace file:
+
+$ strace -e trace=%file,process,dup,dup2,close,pipe,fchdir -y -qq -f -s 256 make 2>>/path/to/tracefile
+
+This will ensure that all the right files are found, as some of them will only be opened during the first step.
