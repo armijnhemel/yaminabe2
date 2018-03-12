@@ -92,8 +92,8 @@ def processline(traceline, defaultpid, pidtocwd, directories, ignorefiles, openf
 	if not pid in pidtocwd and pid != 'default':
 		pidtocwd[pid] = defaultcwd
 
-	if 'chdir(' in traceline:
-		if 'fchdir(' in traceline:
+	if syscall == 'chdir' or syscall == 'fchdir':
+		if syscall == 'fchdir':
 			fchdirres = fchdirre.search(traceline)
 			if fchdirres != None:
 				fchdirfd = int(fchdirres.groups()[0])
@@ -116,7 +116,7 @@ def processline(traceline, defaultpid, pidtocwd, directories, ignorefiles, openf
 				else:
 					if pid in pidtocwd:
 						pidtocwd[pid] = os.path.normpath(os.path.join(basepath, pidtocwd[pid], chdirpath))
-	if 'open(' in traceline:
+	if syscall == 'open':
 		openres = openre.search(traceline)
 		if openres != None:
 			openreturn = openres.groups()[2]
@@ -159,7 +159,7 @@ def processline(traceline, defaultpid, pidtocwd, directories, ignorefiles, openf
 			## add the full reconstructed path, relative to root
 			openfiles.add(fullopenpath)
 
-	if 'openat(' in traceline:
+	if syscall == 'openat':
 		openres = openatre.search(traceline)
 		if openres != None:
 			openfd = os.path.normpath(openres.groups()[0])
@@ -202,7 +202,7 @@ def processline(traceline, defaultpid, pidtocwd, directories, ignorefiles, openf
 						return
 			## add the full reconstructed path, relative to root
 			openfiles.add(fullopenpath)
-	if 'rename(' in traceline:
+	if syscall == 'rename':
 		renameres = renamere.search(traceline)
 		if renameres != None:
 			sourcefile = os.path.normpath(os.path.join(pidtocwd[pid], renameres.groups()[0]))
