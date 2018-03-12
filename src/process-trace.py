@@ -13,11 +13,17 @@
 ##
 ## ---- USAGE ----
 ##
+## Example: Linux kernel
+##
 ## First trace a Linux kernel build with (for example) the following command:
 ##
 ## strace -e trace=%file,process,dup,dup2,close,pipe,fchdir -y -qq -f -s 256 make 2> ../linux-strace
 ##
 ## and then run this script on the output.
+##
+## Alternatively, to save diskspace for the trace file (easily 50%), use:
+##
+## strace -e trace=%process,dup,dup2,open,openat,close,rename,getcwd,chdir,fchdir,pipe -y -qq -f -s 256 make 2> ../linux-strace
 ##
 ## Make sure there is enough disk space available, as trace files for the
 ## Linux kernel tend to be quite big.
@@ -211,8 +217,9 @@ def main(argv):
 	## the following options are provided on the commandline
 	#parser.add_argument("-c", "--config", action="store", dest="cfg", help="path to configuration file", metavar="FILE")
 	parser.add_argument("-f", "--tracefile", action="store", dest="tracefile", help="path to trace file", metavar="FILE")
-	parser.add_argument("-b", "--basepath", action="store", dest="basepath", help="base path of Linux kernel source directory", metavar="BASEPATH")
-	parser.add_argument("-t", "--tempdir", action="store", dest="tempdir", help="directory to write temporary files", metavar="DIR")
+	parser.add_argument("-b", "--basepath", action="store", dest="basepath", help="base path of source directory during build", metavar="BASEPATH")
+	parser.add_argument("-s", "--sourcedir", action="store", dest="sourcedir", help="path of source directory", metavar="SOURCEDIR")
+	parser.add_argument("-t", "--targetdir", action="store", dest="targetdir", help="directory to copy/write files that were opened during the build", metavar="DIR")
 	args = parser.parse_args()
 
 	if args.tracefile == None:
@@ -235,11 +242,11 @@ def main(argv):
 	## well.
 	basepath = os.path.normpath(args.basepath)
 
-	tempdir = None
-	if args.tempdir != None:
-		if not os.path.exists(args.tempdir):
+	targetdir = None
+	if args.targetdir != None:
+		if not os.path.exists(args.targetdir):
 			parser.error("directory to write temporary files does not exist")
-		tempdir = args.tempdir
+		targetdir = args.targetdir
 
 	tracefile = open(args.tracefile, 'r')
 
@@ -247,7 +254,6 @@ def main(argv):
 	firstgetcwd = False
 
 	pidtocwd = {}
-	#pidtocwd['default'] = defaultcwd
 
 	directories = set()
 
@@ -415,19 +421,22 @@ def main(argv):
 
 	print("END RECONSTRUCTION", datetime.datetime.utcnow().isoformat(), file=sys.stderr)
 
-	targetdir = '/tmp/busy'
-	for i in openfiles:
-		if not os.path.exists(i):
-			continue
-		basedir = os.path.dirname(i[len(basepath)+1:])
-		if basedir != '':
-			try:
-				os.makedirs(os.path.join(targetdir, basedir))
-			except:
-				pass
-			shutil.copy(i, os.path.join(targetdir, basedir))
-		else:
-			shutil.copy(i, targetdir)
+	if targetdir != None:
+		print("COPYING FILES TO %s" % targetdir)
+		for i in openfiles:
+			if not os.path.exists(i):
+				continue
+			if os.path.isdir(i):
+				continue
+			basedir = os.path.dirname(i[len(basepath)+1:])
+			if basedir != '':
+				try:
+					os.makedirs(os.path.join(targetdir, basedir))
+				except:
+					pass
+				shutil.copy(i, os.path.join(targetdir, basedir))
+			else:
+				shutil.copy(i, targetdir)
 
 if __name__ == "__main__":
 	main(sys.argv)
