@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-## Copyright 2016 Armijn Hemel for Tjaldur Software Governance Solutions
+## Copyright 2016-2018 Armijn Hemel for Tjaldur Software Governance Solutions
 ## Licensed under Apache 2.0, see LICENSE file for details
 
 '''
@@ -43,8 +43,8 @@ extensions = {'.c'      : 'C',
               '.s'      : 'C',
               '.txx'    : 'C',
               '.y'      : 'C',
-              #'.dts'    : 'C',
-              #'.dtsi'   : 'C',
+              '.dts'    : 'C',
+              '.dtsi'   : 'C',
               '.cs'     : 'C#',
               '.groovy' : 'Java',
               '.java'   : 'Java',
@@ -73,10 +73,14 @@ def scanfiles((directory, filename)):
 	return (filehash, tlshhash, filename)
 
 def main(argv):
+	## First set the commandline options
 	parser = OptionParser()
 	parser.add_option("-c", "--config", action="store", dest="cfg", help="path to configuration file", metavar="FILE")
 	parser.add_option("-t", "--tagfile", action="store", dest="tagfile", help="path to tag file", metavar="FILE")
+	parser.add_option("-f", "--filter", action="store", dest="filterlist", help="path to file with paths to filter", metavar="FILE")
 	(options, args) = parser.parse_args()
+
+	## some sanity checks for the coommandline options
 	if options.cfg == None:
 		parser.error("Need configuration file")
 
@@ -142,6 +146,7 @@ def main(argv):
 				continue
 	configfile.close()
 
+	## read the file with tags that need to be compared
 	tagfile = open(options.tagfile, 'rb')
 	tagfilelines = tagfile.readlines()
 	tagfile.close()
