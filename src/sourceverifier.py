@@ -196,29 +196,12 @@ def scantlsh(args):
         return results
     return
 
-# run ninka and fossology scans here
+# run fossology scans here
 def licensescan(args):
     (filehash, filedir, filename) = args
-    ninkaversion = "2.0-pre1"
-    ninkaenv = os.environ.copy()
-    #ninkabasepath = '/gpl/ninka/ninka-%s' % ninkaversion
-    ninkabasepath = '/home/armijn/git//ninka'
-    ninkaenv['PATH'] = ninkaenv['PATH'] + ":%s/comments" % ninkabasepath
-    ninkaenv['PERL5LIB'] = "%s/lib" % ninkabasepath
-
-    ninkares = set()
     fossologyres = set()
 
-    p = subprocess.Popen(["%s/bin/ninka" % ninkabasepath, os.path.join(filedir, filename)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=ninkaenv)
-    (stanout, stanerr) = p.communicate()
-    ninkasplit = stanout.strip().split(';')[1:]
-    # filter out the licenses that cannot be determined.
-    if ninkasplit[0] == '':
-        ninkares = ['UNKNOWN']
-    else:
-        ninkares.update(ninkasplit[0].split(','))
-
-    return (filehash, filedir, filename, ninkares, fossologyres)
+    return (filehash, filedir, filename, fossologyres)
     # Also run the stand alone Nomos scanner from FOSSology. This requires FOSSology 2.4 or later.
     p = subprocess.Popen(["/usr/share/fossology/nomos/agent/nomossa", "%s/%s" % (filedir, filename)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     (stanout, stanerr) = p.communicate()
@@ -227,7 +210,7 @@ def licensescan(args):
         fossysplit = fosslines[j].strip().rsplit(" ", 1)
         licenses = fossysplit[-1].split(',')
         fossologyres.update(licenses)
-    return (filehash, filedir, filename, ninkares, fossologyres)
+    return (filehash, filedir, filename, fossologyres)
 
 def scanfiles(scanqueue, reportqueue, cursor, conn):
     while True:
@@ -674,13 +657,13 @@ def main(argv):
                 print()
 
         # each entry in notfound files:
-        # (filehash, filedir, filename, ninkares, fossologyres)
+        # (filehash, filedir, filename, fossologyres)
         if notfoundfiles != []:
             notfoundfiles = map(lambda x: (x[1][len(options.scandir):], x[2], x[3], x[4]), notfoundfiles)
             notfoundfiles.sort()
         for i in notfoundfiles:
-            (filedir, filename, ninkares, fossologyres) = i
-            print("NOT FOUND\t%s\tNinka:\t%s\tFOSSology:\t%s" % (os.path.normpath(os.path.join(filedir, filename)), list(ninkares), list(fossologyres)))
+            (filedir, filename, fossologyres) = i
+            print("NOT FOUND\t%s\t%s\tFOSSology:\t%s" % (os.path.normpath(os.path.join(filedir, filename)), list(fossologyres)))
         if untrusted != []:
             untrusted = map(lambda x: (x[1][len(options.scandir):], x[2]), untrusted)
             untrusted.sort()
