@@ -11,15 +11,7 @@ This program was originally written for the OSADL License Compliance Audit:
 https://www.osadl.org/License-Compliance-Audit.osadl-services-lca.0.html
 
 This program checks source code archives for completeness of source
-code (needs database from Binary Analysis Tool), plus optionally scans
-licenses using Ninka and optionally FOSSology and compute distances
-using TLSH.
-
-It also checks for various "smells", such as:
-
-* binary artefacts (pre-built packages, pre-built tools from SDK)
-* leftovers from revision control systems (mainly Subversion)
-
+code (needs database from Binary Analysis Tool).
 '''
 
 import os
@@ -196,22 +188,6 @@ def scantlsh(args):
         return results
     return
 
-# run fossology scans here
-def licensescan(args):
-    (filehash, filedir, filename) = args
-    fossologyres = set()
-
-    return (filehash, filedir, filename, fossologyres)
-    # Also run the stand alone Nomos scanner from FOSSology. This requires FOSSology 2.4 or later.
-    p = subprocess.Popen(["/usr/share/fossology/nomos/agent/nomossa", "%s/%s" % (filedir, filename)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    (stanout, stanerr) = p.communicate()
-    fosslines = stanout.strip().split("\n")
-    for j in range(0, len(fosslines)):
-        fossysplit = fosslines[j].strip().rsplit(" ", 1)
-        licenses = fossysplit[-1].split(',')
-        fossologyres.update(licenses)
-    return (filehash, filedir, filename, fossologyres)
-
 def scanfiles(scanqueue, reportqueue, cursor, conn):
     while True:
         (directory, filename) = scanqueue.get()
@@ -262,7 +238,6 @@ def main(argv):
     # read the configuration file and find out which (package, origin)
     # combinations are trusted. If none is given no packages are trusted.
     trustedpackages = {}
-    scanlicense = False
     gitconfigs = {}
     tlshdb = None
     verbose = False
@@ -286,12 +261,6 @@ def main(argv):
                 verboseconf = config.get(section, 'verbose')
                 if verboseconf == 'yes':
                     verbose = True
-            except:
-                pass
-            try:
-                scanlicenseconf = config.get(section, 'scanlicense')
-                if scanlicenseconf == 'yes':
-                    scanlicense = True
             except:
                 pass
             try:
@@ -370,66 +339,6 @@ def main(argv):
 
     # keep track of which files are found, but not from a trusted source
     untrusted = []
-
-    # keep track of any other smells in the source archive
-    smells = {}
-
-    try:
-        osgen = os.walk(options.scandir, topdown=True)
-        skiplist = set()
-        while True:
-            i = osgen.next()
-            if i[0] in skiplist:
-                print("skipping", i[0], skiplist)
-                continue
-            for d in i[1]:
-                # make sure we can access all directories first
-                if not os.path.islink("%s/%s" % (i[0], d)):
-                    os.chmod("%s/%s" % (i[0], d), stat.S_IRUSR|stat.S_IWUSR|stat.S_IXUSR)
-                # then search for smells
-                if d == '.svn':
-                    if 'svn' in smells:
-                        smells['svn'].add(os.path.normpath("%s/.svn" % i[0]))
-                    else:
-                        smells['svn'] = set([os.path.normpath("%s/.svn" % i[0])])
-                    skiplist.add(os.path.normpath("%s/.svn" % i[0]))
-                    i[1].remove('.svn')
-            for filename in i[2]:
-                # make sure we can access all files first
-                try:
-                    if not os.path.islink("%s/%s" % (i[0], filename)):
-                        os.chmod("%s/%s" % (i[0], filename), stat.S_IRUSR|stat.S_IWUSR|stat.S_IXUSR)
-                except Exception:
-                    pass
-                if os.path.islink("%s/%s" % (i[0], filename)):
-                    continue
-                if os.stat("%s/%s" % (i[0], filename)).st_size == 0:
-                    continue
-                f_nocase = filename.lower()
-                process = False
-                for extension in extensions.keys():
-                    if f_nocase.endswith(extension):
-                        process = True
-                        break
-                if not process:
-                    continue
-                # then do a few more sanity checks for smells, such as
-                # * vim swap files
-                # * binary files
-                # * .gitignore files
-                if filename.startswith('.') and filename.endswith('.swp'):
-                    datafile = open(filename, 'rb')
-                    databuffer = datafile.read(6)
-                    datafile.close()
-                    if databuffer == 'b0VIM\x20':
-                        if 'vim' in smells:
-                            smells['vim'].append("%s/%s" % (i[0], filename))
-                        else:
-                            smells['vim'] = ["%s/%s" % (i[0], filename)]
-                    continue
-                filestoscan.add((i[0], filename))
-    except StopIteration:
-        pass
 
     if verbose:
         print("SCANNING %d files" % len(filestoscan))
@@ -633,29 +542,7 @@ def main(argv):
 
     pool = multiprocessing.Pool()
 
-    #if scanlicense and False:
-    if scanlicense:
-        if verbose:
-            print("DETERMINING LICENSE OF FILES NOT FOUND")
-            sys.stdout.flush()
-        notfoundfiles = pool.map(licensescan, notfoundfiles, 1)
-    else:
-        notfoundfiles = map(lambda x: x + ([], []), notfoundfiles)
-
     if verbose:
-        if smells != {}:
-            print("Smells found:\n")
-            for i in smells:
-                if i == 'vim':
-                    print("* Vim swap files found:")
-                    for s in smells[i]:
-                        print("  -", s)
-                if i == 'svn':
-                    print("* Subversion directories found:")
-                    for s in smells[i]:
-                        print("  -", s)
-                print()
-
         # each entry in notfound files:
         # (filehash, filedir, filename, fossologyres)
         if notfoundfiles != []:
