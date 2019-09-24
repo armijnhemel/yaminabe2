@@ -93,8 +93,8 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                              cwd=gitdir, stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         (stanout, stanerr) = p.communicate()
-        for s in stanout.split('\n')[1:]:
-            blameres = numstatre.match(s)
+        for s in stanout.split(b'\n')[1:]:
+            blameres = numstatre.match(s.decode())
             if blameres is None:
                 # probably binary files such as gifs
                 continue
@@ -106,8 +106,8 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE)
         (stanout, stanerr) = p.communicate()
-        for s in stanout.split('\n'):
-            if s.startswith('Merge:'):
+        for s in stanout.split(b'\n'):
+            if s.startswith(b'Merge:'):
                 mergecommit = True
                 break
 
@@ -117,8 +117,8 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         (stanout, stanerr) = p.communicate()
         newtotalfiles = 0
-        for s in stanout.split('\n')[1:]:
-            blameres = numstatre.match(s)
+        for s in stanout.split(b'\n')[1:]:
+            blameres = numstatre.match(s.decode())
             if blameres is None:
                 # probably binary files such as gifs
                 continue
@@ -162,8 +162,8 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                 endindex = None
 
                 patchids = []
-                for s in stanout.split('\n'):
-                    if s.startswith('diff --git'):
+                for s in stanout.split(b'\n'):
+                    if s.startswith(b'diff --git'):
                         # new patch starts here, so first store any patches
                         # that might already have been processsed
                         seendiff = True
@@ -173,7 +173,7 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                                 pl = functools.reduce(lambda x, y: x + '\n' + y, currentpatch)
                                 p2 = subprocess.Popen([gitpath, 'patch-id'], cwd=gitdir, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                                 (pstanout, pstanerr) = p2.communicate(pl)
-                                patchids.append(pstanout.split()[0])
+                                patchids.append(pstanout.decode().split()[0])
                                 filenametoindex[newfilename] = endindex
                                 hashfiles.update(gitsplit)
 
@@ -188,7 +188,7 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                         checkdiff = True
                         if not relative:
                             # gitlen = len('diff --git a/') :: this is always 13
-                            gitsplit = set(s[13:].split(' b/'))
+                            gitsplit = set(s[13:].split(b' b/'))
                             newgitsplit = set()
                             namefound = False
                             for g in gitsplit:
@@ -213,18 +213,18 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                         # some patches are simply not interesting
                         # at all: deleted files, symbolic links,
                         # permission changes, etc.
-                        if s.startswith('deleted file'):
+                        if s.startswith(b'deleted file'):
                             deletedfile = True
                             continue
-                        elif s.startswith('new file mode 120000'):
+                        elif s.startswith(b'new file mode 120000'):
                             ignorepatch = True
                             continue
-                        elif s.startswith('index') and s.endswith('120000'):
+                        elif s.startswith(b'index') and s.endswith(b'120000'):
                             ignorepatch = True
                             continue
-                    if s.startswith('@@'):
+                    if s.startswith(b'@@'):
                         inpatch = True
-                    if s.startswith('index '):
+                    if s.startswith(b'index '):
                         hascontent = True
                         if mergecommit:
                             lock.acquire()
@@ -236,11 +236,11 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                         lock.acquire()
                         seendict[s] = None
                         lock.release()
-                        endindex = s.rsplit('.', 1)[-1].split(' ')[0]
-                    if s.startswith('+++') and not inpatch and not deletedfile:
+                        endindex = s.rsplit(b'.', 1)[-1].split(b' ')[0]
+                    if s.startswith(b'+++') and not inpatch and not deletedfile:
                         # only add if there actually is a modification
                         if not relative:
-                            newfilename = s.split(' b/', 1)[1]
+                            newfilename = s.split(b' b/', 1)[1]
                         else:
                             newfilename = filtername
                         addpatch = True
@@ -440,7 +440,7 @@ def main(argv):
                 exitgit = True
                 continue
             # check if it is the same git repository
-            gitconfiglines = open(os.path.join(g, '.git', 'config')).readlines()
+            gitconfiglines = open(os.path.join(g, '.git', 'config'), 'r').readlines()
             for gc in gitconfiglines:
                 if 'url =' in gc:
                     gu = gc.split('=', 1)[1].strip()
@@ -632,7 +632,8 @@ def main(argv):
         reportqueue = scanmanager.JoinableQueue(maxsize=0)
         processpool = []
 
-        map(lambda x: scanqueue.put(x), gitrevisions)
+        for g in gitrevisions:
+            scanqueue.put(g)
 
         for i in range(0, processamount):
             p = multiprocessing.Process(target=gitscan,
