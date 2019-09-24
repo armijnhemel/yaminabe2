@@ -32,35 +32,6 @@ try:
 except Exception:
     tlshscan = False
 
-# list of lowercase extensions, plus what language they should be mapped to
-# This is not necessarily correct, but right now it is the best we have.
-extensions = {'.c'      : 'C',
-              '.cc'     : 'C',
-              '.cpp'    : 'C',
-              '.cxx'    : 'C',
-              '.c++'    : 'C',
-              '.h'      : 'C',
-              '.hh'     : 'C',
-              '.hpp'    : 'C',
-              '.hxx'    : 'C',
-              '.l'      : 'C',
-              '.qml'    : 'C',
-              '.s'      : 'C',
-              '.txx'    : 'C',
-              '.y'      : 'C',
-              '.dts'    : 'C',
-              '.dtsi'   : 'C',
-              '.cs'     : 'C#',
-              '.groovy' : 'Java',
-              '.java'   : 'Java',
-              '.jsp'    : 'Java',
-              '.scala'  : 'Java',
-              '.as'     : 'ActionScript',
-              '.js'     : 'JavaScript',
-              '.php'    : 'PHP',
-              '.py'     : 'Python',
-             }
-
 
 def checktrusted(scanqueue, reportqueue, cursor, conn, trustedpackages):
     localcursor = conn.cursor()
