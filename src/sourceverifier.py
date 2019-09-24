@@ -34,7 +34,6 @@ except Exception:
 
 # list of lowercase extensions, plus what language they should be mapped to
 # This is not necessarily correct, but right now it is the best we have.
-# Keep in sync with createdb.py from BAT
 extensions = {'.c'      : 'C',
               '.cc'     : 'C',
               '.cpp'    : 'C',
@@ -61,6 +60,7 @@ extensions = {'.c'      : 'C',
               '.php'    : 'PHP',
               '.py'     : 'Python',
              }
+
 
 def checktrusted(scanqueue, reportqueue, cursor, conn, trustedpackages):
     localcursor = conn.cursor()
@@ -98,6 +98,7 @@ def checktrusted(scanqueue, reportqueue, cursor, conn, trustedpackages):
 
         reportqueue.put((filehash, trusted, untrusted))
         scanqueue.task_done()
+
 
 # compute TLSH
 def scantlsh(args):
@@ -188,6 +189,7 @@ def scantlsh(args):
         return results
     return
 
+
 def scanfiles(scanqueue, reportqueue, cursor, conn):
     while True:
         (directory, filename) = scanqueue.get()
@@ -206,6 +208,7 @@ def scanfiles(scanqueue, reportqueue, cursor, conn):
             found = True
         reportqueue.put((filehash, directory, filename, found))
         scanqueue.task_done()
+
 
 def main(argv):
     parser = argparse.ArgumentParser()
