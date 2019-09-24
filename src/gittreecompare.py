@@ -303,11 +303,11 @@ def main(argv):
                 tlshscore += 400
 
         print("FILES SCANNED: %d" % len(filetohashes1))
-        print("TOTAL DISTANCE: %d" % tlshscore)
+        print("TOTAL TLSH DISTANCE: %d" % tlshscore)
         print("IDENTICAL FILES: %d" % len(identicalfiles))
-        print("0-60: %d" % len(zerotosixty))
-        print("61-150: %d" % len(sixtyoneto150))
-        print("over 150: %d" % len(over150))
+        print("TLSH 0-60: %d" % len(zerotosixty))
+        print("TLSH 61-150: %d" % len(sixtyoneto150))
+        print("TLSH over 150: %d" % len(over150))
         print()
         sys.stdout.flush()
 
