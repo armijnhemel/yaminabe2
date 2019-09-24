@@ -9,7 +9,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0
 #
-# Copyright 2017-2018 - Armijn Hemel for Tjaldur Software Governance Solutions
+# Copyright 2017-2019 - Armijn Hemel for Tjaldur Software Governance Solutions
 #
 # ---- USAGE ----
 #
