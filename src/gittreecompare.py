@@ -26,6 +26,7 @@ import subprocess
 import stat
 import configparser
 import argparse
+import shutil
 from multiprocessing import Pool
 try:
     import tlsh
@@ -100,6 +101,9 @@ def main(argv):
         print("tag file does not exist", file=sys.stderr)
         sys.exit(1)
 
+    if shutil.which('git') is None:
+        print("git program not found in path", file=sys.stderr)
+        sys.exit(1)
     configfile = open(options.cfg, 'r')
     config = configparser.ConfigParser()
     try:
