@@ -44,9 +44,11 @@ def writeresults(reportqueue, gitdatabase, project, giturl, sha256seendict, patc
             # revisions in which there is no interesting content or where
             # just some metadata (permissions, etc.) were changed.
             if hascontent:
-                cursor.execute('insert into deletedrevisions (gitrevision, project, giturl) values (?,?,?)', (gitrevision, project, giturl))
+                cursor.execute('insert into deletedrevisions (gitrevision, project, giturl) values (?,?,?)',
+                               (gitrevision, project, giturl))
             else:
-                cursor.execute('insert into emptyrevisions (gitrevision, project, giturl) values (?,?,?)', (gitrevision, project, giturl))
+                cursor.execute('insert into emptyrevisions (gitrevision, project, giturl) values (?,?,?)',
+                               (gitrevision, project, giturl))
             conn.commit()
         else:
             for result in results:
@@ -142,7 +144,8 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                 if stopprocessing:
                     break
                 if relative:
-                    p = subprocess.Popen([gitpath, 'show', '-m', gitrevision, '--relative=%s' % filtername],
+                    p = subprocess.Popen([gitpath, 'show', '-m', gitrevision,
+                                         '--relative=%s' % filtername],
                                          cwd=gitdir, stdin=subprocess.PIPE,
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 else:
@@ -171,7 +174,10 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                             if newfilename in filternames:
                                 # compute the Git patch id (SHA1) for the patches
                                 pl = functools.reduce(lambda x, y: x + '\n' + y, currentpatch)
-                                p2 = subprocess.Popen([gitpath, 'patch-id'], cwd=gitdir, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                p2 = subprocess.Popen([gitpath, 'patch-id'], cwd=gitdir,
+                                                      stdin=subprocess.PIPE,
+                                                      stdout=subprocess.PIPE,
+                                                      stderr=subprocess.PIPE)
                                 (pstanout, pstanerr) = p2.communicate(pl)
                                 patchids.append(pstanout.decode().split()[0])
                                 filenametoindex[newfilename] = endindex
@@ -216,10 +222,10 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                         if s.startswith(b'deleted file'):
                             deletedfile = True
                             continue
-                        elif s.startswith(b'new file mode 120000'):
+                        if s.startswith(b'new file mode 120000'):
                             ignorepatch = True
                             continue
-                        elif s.startswith(b'index') and s.endswith(b'120000'):
+                        if s.startswith(b'index') and s.endswith(b'120000'):
                             ignorepatch = True
                             continue
                     if s.startswith(b'@@'):
@@ -248,7 +254,10 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
                 if addpatch and currentpatch != []:
                     if newfilename in filternames:
                         pl = functools.reduce(lambda x, y: x + '\n' + y, currentpatch)
-                        p2 = subprocess.Popen([gitpath, 'patch-id'], cwd=gitdir, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        p2 = subprocess.Popen([gitpath, 'patch-id'], cwd=gitdir,
+                                              stdin=subprocess.PIPE,
+                                              stdout=subprocess.PIPE,
+                                              stderr=subprocess.PIPE)
                         (pstanout, pstanerr) = p2.communicate(pl)
                         patchids.append(pstanout.split()[0])
                         filenametoindex[newfilename] = endindex
@@ -264,7 +273,9 @@ def gitscan(scanqueue, reportqueue, gitdir, lock, seendict, gitpath):
         if hashfiles != set():
             for hf in hashfiles:
                 try:
-                    p = subprocess.Popen([gitpath, 'show', filenametoindex[hf]], cwd=gitdir, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    p = subprocess.Popen([gitpath, 'show', filenametoindex[hf]], cwd=gitdir,
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE)
                 except Exception as e:
                     print('cannot git show', gitrevision, e, hf, filenametoindex[hf])
                 (stanout, stanerr) = p.communicate()
@@ -311,7 +322,8 @@ def main(argv):
         try:
             gitdatabase = config.get(section, 'gitdatabase')
         except:
-            print("Database for writing Git results not specified in configuration. Exiting.", file=sys.stderr)
+            print("Database for writing Git results not specified in configuration. Exiting.",
+                  file=sys.stderr)
             configfile.close()
             sys.exit(1)
         try:
@@ -383,22 +395,26 @@ def main(argv):
             try:
                 gitdirs = config.get(section, 'gitdirs').split(':')
             except:
-                print("Git directories not specified in configuration. Skipping.", file=sys.stderr)
+                print("Git directories not specified in configuration. Skipping.",
+                      file=sys.stderr)
                 continue
             giturl = None
             try:
                 giturl = config.get(section, 'giturl')
             except:
-                print("Git URL in %s not provided, extracting from source." % section, file=sys.stderr)
+                print("Git URL in %s not provided, extracting from source." % section,
+                      file=sys.stderr)
             try:
                 project = config.get(section, 'project')
             except:
-                print("Project name not specified in configuration. Skipping.", file=sys.stderr)
+                print("Project name not specified in configuration. Skipping.",
+                      file=sys.stderr)
                 continue
             try:
                 priority = int(config.get(section, 'priority'))
             except:
-                print("Priority not specified in configuration for %s. Setting priority to infinity." % section, file=sys.stderr)
+                print("Priority not specified in configuration for %s. Setting priority to infinity." % section,
+                      file=sys.stderr)
                 priority = sys.maxsize
 
 
@@ -448,7 +464,8 @@ def main(argv):
                         giturl = gu
                     else:
                         if giturl != gu:
-                            print("config url %s for %s does not match %s" % (gu, g, giturl), file=sys.stderr)
+                            print("config url %s for %s does not match %s" % (gu, g, giturl),
+                                  file=sys.stderr)
                             exitgit = True
                             continue
         if giturl != origgiturl:
@@ -456,26 +473,33 @@ def main(argv):
         if exitgit:
             if origgiturl is not None:
                 giturltopriority[origgiturl] = (project, priority)
-            print("Errors found in Git directories for project %s, continuing with configuration for next project" % project, file=sys.stderr)
+            print("Errors found in Git directories for project %s, continuing with configuration for next project" % project,
+                  file=sys.stderr)
             continue
 
         # TODO: make parallel
         if len(gitdirs) > 1:
             for g in set(gitdirs):
                 # now check if the repositories are all up to date for the HEAD branch
-                p = subprocess.Popen([gitpath, 'checkout', '-f', 'HEAD'], cwd=g, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                p = subprocess.Popen([gitpath, 'checkout', '-f', 'HEAD'], cwd=g,
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE)
                 (stanout, stanerr) = p.communicate()
-                p = subprocess.Popen([gitpath, 'rev-list', '--max-count=1', 'HEAD'], cwd=g, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                p = subprocess.Popen([gitpath, 'rev-list', '--max-count=1', 'HEAD'], cwd=g,
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE)
                 (stanout, stanerr) = p.communicate()
                 githeadrevision = stanout.strip()
                 if headrevision is None:
                     headrevision = githeadrevision
                 if headrevision != githeadrevision:
-                    print("directory %s does not match HEAD revision %s" % (g, headrevision), file=sys.stderr)
+                    print("directory %s does not match HEAD revision %s" % (g, headrevision),
+                          file=sys.stderr)
                     exitgit = True
 
         if exitgit:
-            print("Errors found in Git directories for project %s, continuing with configuration for next project" % project, file=sys.stderr)
+            print("Errors found in Git directories for project %s, continuing with configuration for next project" % project,
+                  file=sys.stderr)
             continue
 
         if origgiturl is None:
@@ -537,7 +561,8 @@ def main(argv):
         if ramdisk and len(gitdirs) == 1:
             gitdirs = gitdirs*processors
 
-        p = subprocess.Popen([gitpath, 'rev-list', '--all'], cwd=gitdirs[0], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.Popen([gitpath, 'rev-list', '--all'], cwd=gitdirs[0], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         (stanout, stanerr) = p.communicate()
         gitrevisions = stanout.decode().strip().split('\n')
         processamount = len(gitdirs)
