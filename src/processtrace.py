@@ -9,7 +9,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0
 #
-# Copyright 2017-2019 - Armijn Hemel for Tjaldur Software Governance Solutions
+# Copyright 2017-2021 - Armijn Hemel for Tjaldur Software Governance Solutions
 #
 # ---- USAGE ----
 #
@@ -220,11 +220,17 @@ def main(argv):
     parser = argparse.ArgumentParser()
 
     # the following options are provided on the commandline
-    #parser.add_argument("-c", "--config", action="store", dest="cfg", help="path to configuration file", metavar="FILE")
-    parser.add_argument("-f", "--tracefile", action="store", dest="tracefile", help="path to trace file", metavar="FILE")
-    parser.add_argument("-b", "--basepath", action="store", dest="basepath", help="base path of source directory during build", metavar="BASEPATH")
-    parser.add_argument("-s", "--sourcedir", action="store", dest="sourcedir", help="path of source directory", metavar="SOURCEDIR")
-    parser.add_argument("-t", "--targetdir", action="store", dest="targetdir", help="directory to copy/write files that were opened during the build", metavar="DIR")
+    #parser.add_argument("-c", "--config", action="store", dest="cfg",
+    #                    help="path to configuration file", metavar="FILE")
+    parser.add_argument("-f", "--tracefile", action="store", dest="tracefile",
+                        help="path to trace file", metavar="FILE")
+    parser.add_argument("-b", "--basepath", action="store", dest="basepath",
+                        help="base path of source directory during build", metavar="BASEPATH")
+    parser.add_argument("-s", "--sourcedir", action="store", dest="sourcedir",
+                        help="path of source directory", metavar="SOURCEDIR")
+    parser.add_argument("-t", "--targetdir", action="store", dest="targetdir",
+                        help="directory to copy/write files that were opened during the build",
+                        metavar="DIR")
     args = parser.parse_args()
 
     if args.tracefile is None:
@@ -341,7 +347,8 @@ def main(argv):
                     pidtocwd[clonepid] = copy.deepcopy(pidtocwd[pid])
                     if backlog != []:
                         for traceline in backlog:
-                            processline(traceline, defaultpid, pidtocwd, directories, ignorefiles, openfiles, basepath, defaultcwd)
+                            processline(traceline, defaultpid, pidtocwd, directories,
+                                        ignorefiles, openfiles, basepath, defaultcwd)
                         backlog = []
                         backlogged = False
 
@@ -422,7 +429,8 @@ def main(argv):
                                 # add the full reconstructed path, relative to root
                                 openfiles.add(openpath)
         else:
-            processline(i.strip(), defaultpid, pidtocwd, directories, ignorefiles, openfiles, basepath, defaultcwd)
+            processline(i.strip(), defaultpid, pidtocwd, directories, ignorefiles,
+                        openfiles, basepath, defaultcwd)
 
     print("END RECONSTRUCTION", datetime.datetime.utcnow().isoformat(), file=sys.stderr)
 
