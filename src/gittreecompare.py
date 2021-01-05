@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright 2016-2019 Armijn Hemel for Tjaldur Software Governance Solutions
+# Copyright 2016-2021 Armijn Hemel for Tjaldur Software Governance Solutions
 # Licensed under Apache 2.0, see LICENSE file for details
 
 '''
@@ -30,9 +30,9 @@ import shutil
 from multiprocessing import Pool
 try:
     import tlsh
-    tlshscan = True
 except Exception:
-    tlshscan = False
+    print("TLSH not installed", file=sys.stderr)
+    sys.exit(1)
 
 # This is not necessarily correct, but right now it is the best we have.
 extensions = {'.c'      : 'C',
@@ -111,7 +111,7 @@ def main(argv):
     except Exception as ex:
         print(ex, file=sys.stderr)
         configfile.close()
-        exit(1)
+        sys.exit(1)
 
     # read the configuration file and find out which (package, origin) combinations are trusted.
     # If none is given no packages are trusted.
@@ -122,41 +122,40 @@ def main(argv):
     for section in config.sections():
         if section == "global":
             continue
-        elif section == "sourceverify":
+        if section == "sourceverify":
             continue
-        else:
-            try:
-                configtype = config.get(section, 'type')
-            except:
+        try:
+            configtype = config.get(section, 'type')
+        except:
+            continue
+        if configtype != 'project':
+            continue
+        giturl = None
+        try:
+            gitdirs = list(set(config.get(section, 'gitdirs').split(':')))
+            if gitdirs == []:
                 continue
-            if configtype != 'project':
+            # now get the Git URL from the configuration file of the first Git repository
+            g = os.path.normpath(gitdirs[0])
+            if not os.path.exists(os.path.join(g, '.git')):
+                print("directory %s is not a valid Git repository" % g, file=sys.stderr)
                 continue
-            giturl = None
-            try:
-                gitdirs = list(set(config.get(section, 'gitdirs').split(':')))
-                if gitdirs == []:
-                    continue
-                # now get the Git URL from the configuration file of the first Git repository
-                g = os.path.normpath(gitdirs[0])
-                if not os.path.exists(os.path.join(g, '.git')):
-                    print("directory %s is not a valid Git repository" % g, file=sys.stderr)
-                    continue
-                # check if it is the same git repository
-                gitconfiglines = open(os.path.join(g, '.git', 'config')).readlines()
-                for gc in gitconfiglines:
-                    if 'url =' in gc:
-                        gu = gc.split('=', 1)[1].strip()
-                        giturl = gu
-                if giturl is not None:
-                    gitconfigs[giturl] = g
-            except:
-                continue
-            try:
-                ignoredirs = list(set(config.get(section, 'gitignoredirs').split(':')))
-                gitignoredirs[giturl] = ignoredirs
-            except:
-                gitignoredirs[giturl] = []
-                continue
+            # check if it is the same git repository
+            gitconfiglines = open(os.path.join(g, '.git', 'config')).readlines()
+            for gc in gitconfiglines:
+                if 'url =' in gc:
+                    gu = gc.split('=', 1)[1].strip()
+                    giturl = gu
+            if giturl is not None:
+                gitconfigs[giturl] = g
+        except:
+            continue
+        try:
+            ignoredirs = list(set(config.get(section, 'gitignoredirs').split(':')))
+            gitignoredirs[giturl] = ignoredirs
+        except:
+            gitignoredirs[giturl] = []
+            continue
     configfile.close()
 
     # read the file with tags that need to be compared
@@ -232,7 +231,8 @@ def main(argv):
                         # make sure we can access all files first
                         try:
                             if not os.path.islink("%s/%s" % (i[0], filename)):
-                                os.chmod("%s/%s" % (i[0], filename), stat.S_IRUSR|stat.S_IWUSR|stat.S_IXUSR)
+                                os.chmod("%s/%s" % (i[0], filename),
+                                         stat.S_IRUSR|stat.S_IWUSR|stat.S_IXUSR)
                         except Exception as e:
                             #print(e)
                             pass
@@ -262,8 +262,8 @@ def main(argv):
             scansha256 = pool.map(scanfiles, filestoscan, 1)
             sha256filespertag[t] = scansha256
 
-        filetohashes1 = {}
-        filetohashes2 = {}
+        file_to_hashes1 = {}
+        file_to_hashes2 = {}
 
         toosmall = set()
 
@@ -271,47 +271,48 @@ def main(argv):
             (filehash, tlshhash, filename) = ta
             if tlshhash is None:
                 toosmall.add(filename)
-            filetohashes1[filename] = (filehash, tlshhash)
+            file_to_hashes1[filename] = (filehash, tlshhash)
 
         for ta in sha256filespertag[(tags2[tr], gitrepo2)]:
             (filehash, tlshhash, filename) = ta
             if tlshhash is None:
                 toosmall.add(filename)
-            filetohashes2[filename] = (filehash, tlshhash)
+            file_to_hashes2[filename] = (filehash, tlshhash)
 
-        identicalfiles = set()
-        notfoundfiles = set()
-        zerotosixty = set()
-        sixtyoneto150 = set()
-        over150 = set()
+        identical_files = set()
+        not_found_files = set()
+        zero_to_sixty = set()
+        sixtyone_to_150 = set()
+        over_150 = set()
 
-        tlshscore = 0
-        for ta in filetohashes1:
-            if ta in filetohashes2:
-                if filetohashes1[ta] == filetohashes2[ta]:
-                    identicalfiles.add(ta)
+        tlsh_score = 0
+        for ta in file_to_hashes1:
+            if ta in file_to_hashes2:
+                if file_to_hashes1[ta] == file_to_hashes2[ta]:
+                    identical_files.add(ta)
                 else:
                     if ta in toosmall:
                         if verbose:
                             print('too small', ta)
                         continue
-                    tmptlsh = tlsh.diff(filetohashes1[ta][1], filetohashes2[ta][1])
-                    tlshscore += tmptlsh
+                    tmptlsh = tlsh.diff(file_to_hashes1[ta][1], file_to_hashes2[ta][1])
+                    tlsh_score += tmptlsh
                     if tmptlsh <= 60:
-                        zerotosixty.add(ta)
+                        zero_to_sixty.add(ta)
                     elif tmptlsh <= 150:
-                        sixtyoneto150.add(ta)
+                        sixtyone_to_150.add(ta)
                     else:
-                        over150.add(ta)
+                        over_150.add(ta)
             else:
-                tlshscore += 400
+                # new file, so add maximum score
+                tlsh_score += 400
 
-        print("FILES SCANNED: %d" % len(filetohashes1))
-        print("TOTAL TLSH DISTANCE: %d" % tlshscore)
-        print("IDENTICAL FILES: %d" % len(identicalfiles))
-        print("TLSH 0-60: %d" % len(zerotosixty))
-        print("TLSH 61-150: %d" % len(sixtyoneto150))
-        print("TLSH over 150: %d" % len(over150))
+        print("FILES SCANNED: %d" % len(file_to_hashes1))
+        print("TOTAL TLSH DISTANCE: %d" % tlsh_score)
+        print("IDENTICAL FILES: %d" % len(identical_files))
+        print("TLSH 0-60: %d" % len(zero_to_sixty))
+        print("TLSH 61-150: %d" % len(sixtyone_to_150))
+        print("TLSH over 150: %d" % len(over_150))
         print()
         sys.stdout.flush()
 
