@@ -28,7 +28,7 @@ from multiprocessing import Process, Lock
 from multiprocessing.sharedctypes import Value, Array
 import tlsh
 
-numstatre = re.compile('\d+\t\d+\t(.*)')
+numstatre = re.compile(r'\d+\t\d+\t(.*)')
 
 # one process grabs the results from the queue and writes them to the database
 def writeresults(reportqueue, gitdatabase, project, giturl, sha256seendict, patchiddict):
